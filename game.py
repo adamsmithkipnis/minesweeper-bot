@@ -72,7 +72,7 @@ class GameState:
     mine_count: int
     mine_cells: set                       # {(r, c), ...} — the hidden state
     revealed: dict = field(default_factory=dict)   # {(r, c): adjacent count}
-    turn_number: int = 1
+    turn_number: int = 0        # turns played by the crowd; the opening is 0
     status: str = ACTIVE
     last_post_uri: str = ""
 

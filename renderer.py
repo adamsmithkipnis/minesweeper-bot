@@ -178,8 +178,8 @@ def render_board(state: game.GameState, highlight: str = "") -> bytes:
 
     opened, total = len(state.revealed), state.total_safe
     draw.text((LABEL_GUTTER, height - FOOTER_H // 2),
-              f"TURN {state.turn_number}", fill=LABEL, font=label_font,
-              anchor="lm")
+              f"TURN {state.turn_number}" if state.turn_number else "NEW BOARD",
+              fill=LABEL, font=label_font, anchor="lm")
     draw.text((width - MARGIN, height - FOOTER_H // 2),
               f"{opened}/{total} CLEARED", fill=LABEL, font=label_font,
               anchor="rm")
@@ -208,7 +208,9 @@ def build_alt_text(state: game.GameState) -> str:
     letters = game.row_letters(state.rows)
     opened, total = len(state.revealed), state.total_safe
 
-    head = (f"Minesweeper turn {state.turn_number}. "
+    when = (f"turn {state.turn_number}" if state.turn_number
+            else "a new board")
+    head = (f"Minesweeper, {when}. "
             f"{state.rows} by {state.cols} grid, rows A to {letters[-1]}, "
             f"columns 1 to {state.cols}. "
             f"{state.mine_count} mines. "
