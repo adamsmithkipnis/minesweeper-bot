@@ -107,13 +107,17 @@ stay that way.
 
 ### Run as a daemon (macOS)
 
-Edit the paths in `com.minesweeper.bot.plist`, then:
-
 ```bash
-cp com.minesweeper.bot.plist ~/Library/LaunchAgents/
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.minesweeper.bot.plist
-launchctl list | grep minesweeper        # a PID means it is running
+./setup.sh                  # builds the venv, installs the launchd jobs, starts them
+./setup.sh --check          # what is installed and running right now
+./setup.sh --dry-run        # show what it would do, change nothing
 ```
+
+`setup.sh` is idempotent and fills the real paths into the launchd plists, so
+nothing has to be hand-edited. It will not create or edit `.env`: the app
+password is yours and should not pass through anything that logs it. On the
+first run it writes `.env` from the example with everything filled in except
+the password, and stops so you can add that one line.
 
 ### Deploying
 
