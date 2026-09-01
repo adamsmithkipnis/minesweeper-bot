@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.minesweeper.deploy</string>
+
+    <!-- Polls origin every 5 minutes and redeploys when main moves, so a
+         `git push` from anywhere is the deploy. Exits silently when nothing
+         has changed, and refuses to touch a dirty working tree. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/ABSOLUTE/PATH/TO/minesweeper-bot/deploy.sh</string>
+        <string>--if-changed</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/ABSOLUTE/PATH/TO/minesweeper-bot</string>
+
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/ABSOLUTE/PATH/TO/minesweeper-bot/deploy.log</string>
+    <key>StandardErrorPath</key>
+    <string>/ABSOLUTE/PATH/TO/minesweeper-bot/deploy.log</string>
+</dict>
+</plist>

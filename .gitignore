@@ -16,3 +16,6 @@ venv/
 
 # macOS
 .DS_Store
+
+# Dry-run output: generated posts and board images.
+dry-run/

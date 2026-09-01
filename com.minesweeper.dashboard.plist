@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.minesweeper.dashboard</string>
+
+    <!-- EDIT: absolute paths. Use the repo's own .venv, not the system
+         python, so dependencies are pinned and predictable. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/ABSOLUTE/PATH/TO/minesweeper-bot/.venv/bin/python</string>
+        <string>/ABSOLUTE/PATH/TO/minesweeper-bot/dashboard.py</string>
+    </array>
+
+    <!-- EDIT: project root (where .env lives) -->
+    <key>WorkingDirectory</key>
+    <string>/ABSOLUTE/PATH/TO/minesweeper-bot</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- EDIT: match LOG_PATH in .env for the bot. launchd redirects stdout
+         here, which is why the code only adds a stdout log handler when
+         stdout is a TTY — otherwise every line lands twice. -->
+    <key>StandardOutPath</key>
+    <string>/ABSOLUTE/PATH/TO/minesweeper-bot/dashboard.log</string>
+    <key>StandardErrorPath</key>
+    <string>/ABSOLUTE/PATH/TO/minesweeper-bot/dashboard.log</string>
+</dict>
+</plist>
