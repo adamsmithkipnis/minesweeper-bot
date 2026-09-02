@@ -10,7 +10,7 @@ opening a blank floods its whole region, and **one mine ends the run**.
 
 ## Why Minesweeper
 
-It fixes the two things that were wrong with the Battleship bot.
+It fixes the two things that were wrong with my earlier Battleship bot.
 
 **Hidden information stays hidden.** Battleship published each team's fleet as
 an image from a public account, so a voter for one side could open the other
