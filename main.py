@@ -21,7 +21,7 @@ import argparse
 import logging
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
@@ -41,6 +41,22 @@ scheduler = BlockingScheduler()
 # ---------------------------------------------------------------------------
 # Post copy
 # ---------------------------------------------------------------------------
+
+def _with_tags(text: str, tags: list | None = None) -> str:
+    """Append hashtags, stopping at the first one that will not fit.
+
+    Content wins over reach: the board information is built first and a tag is
+    only added while the whole post still clears the limit, so discovery tags
+    can never be the reason a post gets clamped.
+    """
+    out = text
+    for i, tag in enumerate(config.HASHTAGS if tags is None else tags):
+        candidate = f"{out}{chr(10) if i == 0 else ' '}{tag}"
+        if len(candidate) > bluesky.POST_LIMIT:
+            break
+        out = candidate
+    return out
+
 
 def _plural(n: int, word: str) -> str:
     return f"{n} {word}" + ("" if n == 1 else "s")
@@ -76,13 +92,14 @@ def _ask_line(state: game.GameState) -> str:
     last = f"{game.row_letters(state.rows)[-1]}{state.cols}"
     return (f"{_plural(left, 'cell')} left, {state.mine_count} mines.\n"
             f"Reply with a coordinate, A1 to {last}.\n"
-            f"{config.TURN_MINUTES} min. {config.HASHTAG}")
+            f"{config.TURN_MINUTES} min.")
 
 
 def build_turn_text(state: game.GameState, coord: str, vote, source: str) -> str:
-    return (f"Turn {state.turn_number} · {coord} {_outcome_phrase(state, coord)}\n"
-            f"{_credit_line(vote, source)}\n\n"
-            f"{_ask_line(state)}")
+    return _with_tags(
+        f"Turn {state.turn_number} · {coord} {_outcome_phrase(state, coord)}\n"
+        f"{_credit_line(vote, source)}\n\n"
+        f"{_ask_line(state)}")
 
 
 def build_opening_text(state: game.GameState, record: dict) -> str:
@@ -90,12 +107,13 @@ def build_opening_text(state: game.GameState, record: dict) -> str:
     if record["played"]:
         scoreline = (f"All time: {record['cleared']} cleared, "
                      f"{record['exploded']} lost.\n")
-    return (f"💣 NEW BOARD — {state.rows}x{state.cols}, "
-            f"{state.mine_count} mines.\n\n"
-            f"I opened {state.last_coord} to start us off. "
-            f"You pick the rest — one mine ends the run.\n"
-            f"{scoreline}\n"
-            f"{_ask_line(state)}")
+    return _with_tags(
+        f"💣 NEW BOARD — {state.rows}x{state.cols}, "
+        f"{state.mine_count} mines.\n\n"
+        f"I opened {state.last_coord} to start us off. "
+        f"You pick the rest — one mine ends the run.\n"
+        f"{scoreline}\n"
+        f"{_ask_line(state)}")
 
 
 def build_gameover_text(state: game.GameState, coord: str, vote, source: str,
@@ -116,8 +134,8 @@ def build_gameover_text(state: game.GameState, coord: str, vote, source: str,
              f"{_plural(state.turn_number, 'move')}.\n" if crowd_moves else "")
     tail = (f"{yours}"
             f"All time: {record['cleared']} cleared, {record['exploded']} lost.\n"
-            f"New board in {_restart_phrase()}. {config.HASHTAG}")
-    return f"{head}\n{_credit_line(vote, source)}\n\n{tail}"
+            f"New board in {_restart_phrase()}.")
+    return _with_tags(f"{head}\n{_credit_line(vote, source)}\n\n{tail}")
 
 
 def build_credit_reply(state: game.GameState, coord: str, vote) -> str:
@@ -127,9 +145,11 @@ def build_credit_reply(state: game.GameState, coord: str, vote) -> str:
         outcome = "and that cleared the board. Nice."
     else:
         outcome = f"and it {_outcome_phrase(state, coord)}."
-    return (f"🎯 Your call. We opened {coord} on turn {state.turn_number} "
-            f"{outcome}\n\n"
-            f"({vote.votes} of {vote.total_voters} votes) {config.HASHTAG}")
+    return _with_tags(
+        f"🎯 Your call. We opened {coord} on turn {state.turn_number} "
+        f"{outcome}\n\n"
+        f"({vote.votes} of {vote.total_voters} votes)",
+        tags=[config.REPLY_HASHTAG])
 
 
 def _restart_phrase() -> str:
@@ -336,6 +356,28 @@ def _start_new_game() -> None:
 # Startup
 # ---------------------------------------------------------------------------
 
+# Restarting the process must not push the next turn back by a whole interval.
+# A deploy happens whenever anybody pushes, and APScheduler counts an interval
+# job from when the scheduler starts — so without this, three deploys in an
+# afternoon quietly walk the turn time later and later.
+OVERDUE_GRACE = timedelta(seconds=30)
+
+
+def next_turn_time(last: datetime | None, now: datetime,
+                   interval_minutes: int) -> datetime:
+    """When the first turn after a restart should land.
+
+    Anchored to the last turn that actually posted, not to process start. If
+    the bot was down past the deadline the turn is taken shortly after boot
+    rather than instantly, so a crash loop cannot burn through a board.
+    """
+    interval = timedelta(minutes=interval_minutes)
+    if last is None:
+        return now + interval
+    scheduled = last + interval
+    return scheduled if scheduled > now else now + OVERDUE_GRACE
+
+
 def setup_logging() -> None:
     """Log to LOG_PATH, and to the screen as well when interactive.
 
@@ -396,10 +438,14 @@ def main() -> None:
     if state is None or state.status != game.ACTIVE:
         start_new_game()
 
+    first = next_turn_time(db.last_turn_at(), datetime.now(timezone.utc),
+                           config.TURN_MINUTES)
     scheduler.add_job(game_tick, "interval", seconds=config.TURN_MINUTES * 60,
-                      id="game_tick", coalesce=True, max_instances=1)
-    logger.info("Scheduler started; one turn every %d minutes",
-                config.TURN_MINUTES)
+                      start_date=first.astimezone(), id="game_tick",
+                      coalesce=True, max_instances=1,
+                      misfire_grace_time=config.TURN_MINUTES * 60)
+    logger.info("Scheduler started; one turn every %d minutes, next at %s",
+                config.TURN_MINUTES, first.astimezone().strftime("%H:%M:%S %Z"))
     scheduler.start()
 
 

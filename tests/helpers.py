@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import game      # noqa: E402
 import solver    # noqa: E402
 import votes     # noqa: E402
+import main      # noqa: E402
 
 
 def make(rows: int, cols: int, mines: list, revealed: list) -> game.GameState:

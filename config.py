@@ -41,6 +41,15 @@ LOG_PATH = os.environ.get("LOG_PATH", "")
 POST_MODE = os.environ.get("POST_MODE", "live")
 DRY_DIR = os.environ.get("DRY_DIR", "dry-run")
 
-HASHTAG = os.environ.get("HASHTAG", "#Minesweeper")
+# Appended to posts in this order, and only while they still fit under the
+# 300-character limit — so a tag can never push the board information out.
+HASHTAGS = os.environ.get(
+    "HASHTAGS",
+    "#Minesweeper #gamedev #indiedev #solodev #indiegames #play",
+).split()
+
+# The one tag that goes on replies to individual followers. Six hashtags in a
+# personal reply reads as spam; in a broadcast post it reads as reach.
+REPLY_HASHTAG = os.environ.get("REPLY_HASHTAG", "#Minesweeper")
 DASHBOARD_PORT = int(os.environ.get("DASHBOARD_PORT", "8766"))
 SERVICE = "com.minesweeper.bot"

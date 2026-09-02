@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from datetime import datetime, timezone
 
 import config
 import game
@@ -203,6 +204,27 @@ def load_state() -> GameState | None:
 # ---------------------------------------------------------------------------
 # History and moves
 # ---------------------------------------------------------------------------
+
+def last_turn_at() -> datetime | None:
+    """When the current board last advanced, as an aware UTC datetime.
+
+    State is saved exactly once per turn, after the post succeeds, so
+    `updated_at` is the time of the last turn that actually reached Bluesky.
+    """
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT updated_at FROM game_state WHERE id = 1").fetchone()
+    except sqlite3.Error:
+        return None
+    if not row or not row["updated_at"]:
+        return None
+    try:
+        stamp = datetime.strptime(row["updated_at"], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    return stamp.replace(tzinfo=timezone.utc)   # SQLite CURRENT_TIMESTAMP is UTC
+
 
 def record_finished(state: GameState) -> None:
     with _connect() as conn:
