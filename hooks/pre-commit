@@ -48,9 +48,9 @@ fi
 if [ "$fail" -ne 0 ]; then
   cat >&2 <<'MSG'
 
-  The repo is public. Anything committed here is immediately readable by
-  anyone, and rewriting history does not reliably unpublish it — assume a
-  leaked password is burned and rotate it in Bluesky settings.
+  Committing a secret is not undone by deleting it in a later commit, and
+  rewriting published history does not reliably unpublish it. If one does
+  get out, treat it as burned and revoke it in Bluesky's App Passwords.
 
   If this is a false positive: git commit --no-verify
 
