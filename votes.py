@@ -42,6 +42,19 @@ _IS_MINE = re.compile(
     re.IGNORECASE,
 )
 
+# Danger symbols. These need their own pattern because \b word boundaries do
+# not apply to emoji, so they can never match through _AVOID_WORDS — which is
+# how "🚩 C3" came to read as a vote to OPEN C3: the most natural way anyone
+# would flag a mine was the one phrasing that detonated it.
+_DANGER = "\U0001F6A9\U0001F3F4\u26F3\U0001F4A3\U0001F4A5\u2620\u26A0\u274C\U0001F6D1\u2757\u203C"
+_DANGER_BEFORE = re.compile(rf"[{_DANGER}][^A-Za-z0-9]{{0,4}}$")
+_DANGER_AFTER = re.compile(rf"^[^A-Za-z0-9]{{0,4}}[{_DANGER}]")
+
+# "unflag C3" is a request to take a mark off, never a request to open the
+# cell. Left unhandled it parsed as a plain vote for C3.
+_UNDO_BEFORE = re.compile(r"\b(?:un-?flag(?:ging|ged)?|unmark)\b[^A-Za-z0-9]{0,4}$",
+                          re.IGNORECASE)
+
 _NEGATION_BEFORE = re.compile(
     rf"\b(?:{_AVOID_WORDS})"
     rf"(?:[^A-Za-z0-9]{{0,4}}[A-Za-z]{{1,7}})?"
@@ -102,7 +115,16 @@ def find_mentions(text: str, rows: int, cols: int) -> list:
         before = text[max(0, match.start() - _LOOKBACK):match.start()]
         after = text[match.end():match.end() + _LOOKBACK]
 
-        warning = bool(_IS_MINE.match(after)) or bool(_NEGATION_BEFORE.search(before))
+        undo = bool(_UNDO_BEFORE.search(before))
+        warning = not undo and (
+            bool(_IS_MINE.match(after))
+            or bool(_NEGATION_BEFORE.search(before))
+            or bool(_DANGER_BEFORE.search(before))
+            or bool(_DANGER_AFTER.match(after))
+        )
+        if undo:
+            # Neither a vote nor a warning: it is a request about a mark.
+            continue
         choice = bool(vote_word.search(before)) and not warning
         out.append((coord, choice, warning))
     return out

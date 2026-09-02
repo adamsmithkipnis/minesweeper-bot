@@ -71,6 +71,35 @@ class ArgumentsAndWorking(unittest.TestCase):
         self.assertEqual(vote("I think A1 or B2, probably B2"), "B2")
 
 
+class DangerSymbols(unittest.TestCase):
+    """The most natural way to flag a mine must not open it.
+
+    Word boundaries do not apply to emoji, so these could never match through
+    the word-based warning patterns — which made the flag emoji parse as an
+    ordinary vote and turned "danger here" into "open this cell".
+    """
+
+    def test_flag_emoji_is_never_a_vote(self):
+        for text in ("🚩 C3", "🚩C3", "C3 🚩", "🚩 - C3"):
+            self.assertIsNone(vote(text), text)
+
+    def test_other_danger_symbols(self):
+        for text in ("💣 D4", "D4 💣", "⚠️ E5", "☠️ F6", "C3 ❌", "🛑 B2"):
+            self.assertIsNone(vote(text), text)
+
+    def test_a_warning_symbol_does_not_swallow_the_real_vote(self):
+        self.assertEqual(vote("🚩 C3 so D4 is safe — D4"), "D4")
+        self.assertEqual(vote("💣 A1, I vote B7"), "B7")
+
+    def test_unflagging_is_not_a_vote_to_open(self):
+        for text in ("unflag C3", "un-flag C3", "unmark C3"):
+            self.assertIsNone(vote(text), text)
+
+    def test_ordinary_votes_are_untouched(self):
+        self.assertEqual(vote("D4"), "D4")
+        self.assertEqual(vote("I vote D4"), "D4")
+
+
 class EnglishHazards(unittest.TestCase):
     """Battleship's lesson: be conservative about ordinary words."""
 
