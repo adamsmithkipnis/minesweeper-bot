@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+#
+# Refuses to commit credentials.
+#
+# Committed to the repo rather than left in .git/hooks, because a hook that
+# lives only in .git/hooks protects exactly one checkout — and the machine
+# most likely to have a real .env sitting next to it is the Mini, not the
+# laptop. setup.sh points core.hooksPath here so both get it.
+#
+# To override deliberately: git commit --no-verify
+
+set -uo pipefail
+
+fail=0
+note() { printf '  %s\n' "$*" >&2; }
+
+staged="$(git diff --cached --name-only --diff-filter=ACM)"
+
+# 1. The credentials file itself, under any of its usual names.
+while IFS= read -r file; do
+  [ -n "$file" ] || continue
+  base="$(basename "$file")"
+  case "$base" in
+    .env.example|.env.sample|.env.template) continue ;;
+    .env|.env.*|*.env) ;;
+    *) continue ;;
+  esac
+  if [ "$fail" -eq 0 ]; then
+    printf '\nBlocked: this commit contains a credentials file.\n\n' >&2
+  fi
+  note "$file"
+  fail=1
+done <<< "$staged"
+
+# 2. Content shaped like a Bluesky app password (four groups of four), in
+#    case it is pasted somewhere other than .env — a README, a config, a
+#    debugging note. The placeholder in .env.example is exempt.
+if git diff --cached -U0 -- . 2>/dev/null \
+   | grep -E '^\+' \
+   | grep -v 'xxxx-xxxx-xxxx-xxxx' \
+   | grep -qE '[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}'; then
+  printf '\nBlocked: a staged line looks like an app password.\n\n' >&2
+  git diff --cached -U0 -- . | grep -E '^\+' | grep -v 'xxxx-xxxx-xxxx-xxxx' \
+    | grep -nE '[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}' | head -3 >&2
+  fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+  cat >&2 <<'MSG'
+
+  The repo is public. Anything committed here is immediately readable by
+  anyone, and rewriting history does not reliably unpublish it — assume a
+  leaked password is burned and rotate it in Bluesky settings.
+
+  If this is a false positive: git commit --no-verify
+
+MSG
+  exit 1
+fi
+exit 0

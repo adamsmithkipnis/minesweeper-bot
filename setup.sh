@@ -71,6 +71,10 @@ step "Checking the checkout"
 [ -f "$REPO_DIR/main.py" ] || die "run this from the minesweeper-bot checkout"
 say "$REPO_DIR"
 
+step "Commit guard"
+run git -C "$REPO_DIR" config core.hooksPath hooks
+say "pre-commit hook active — .env and app-password-shaped strings are blocked"
+
 step "Virtualenv and dependencies"
 if [ ! -x "$VENV/bin/python" ]; then
   run /usr/bin/python3 -m venv "$VENV"
