@@ -44,9 +44,22 @@ SERVICES=(com.minesweeper.bot com.minesweeper.deploy)
 
 status_report() {
   step "Status"
-  say "repo:   $REPO_DIR ($(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo 'not a git checkout'))"
+  local head behind
+  head="$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo '?')"
+  say "repo:   $REPO_DIR (at $head)"
+  if git -C "$REPO_DIR" fetch --quiet origin main 2>/dev/null; then
+    behind="$(git -C "$REPO_DIR" rev-list --count HEAD..origin/main 2>/dev/null || echo 0)"
+    if [ "${behind:-0}" -gt 0 ]; then
+      say "        BEHIND origin/main by $behind commit(s) — deploys are not landing"
+    else
+      say "        up to date with origin/main"
+    fi
+  else
+    say "        could not reach origin (network, or git not on PATH)"
+  fi
   say "venv:   $([ -x "$VENV/bin/python" ] && "$VENV/bin/python" -V 2>&1 || echo 'not created')"
   say ".env:   $([ -f "$REPO_DIR/.env" ] && echo present || echo MISSING)"
+  say "git:    $(command -v git || echo 'NOT ON PATH')"
   for service in com.minesweeper.bot com.minesweeper.deploy com.minesweeper.dashboard; do
     local line pid
     line="$(launchctl list | awk -v s="$service" '$3 == s {print $1}')"
@@ -58,6 +71,13 @@ status_report() {
       say "$service: running (pid $line)"
     fi
   done
+  if [ -f "$REPO_DIR/deploy.log" ]; then
+    say ""
+    say "last lines of deploy.log:"
+    tail -6 "$REPO_DIR/deploy.log" | sed 's/^/    /'
+  else
+    say "deploy.log: none yet — the watcher has never run"
+  fi
 }
 
 if [ "$CHECK_ONLY" -eq 1 ]; then

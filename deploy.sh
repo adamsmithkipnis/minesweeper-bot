@@ -14,6 +14,12 @@
 
 set -euo pipefail
 
+# launchd runs jobs with a minimal PATH — roughly /usr/bin:/bin:/usr/sbin:/sbin
+# and nothing else. A Homebrew git lives outside that, so the watcher would
+# fail to find `git` and die silently every five minutes, which looks exactly
+# like "deploys stopped working for no reason".
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV="$REPO_DIR/.venv"
 SERVICE="com.minesweeper.bot"
@@ -49,6 +55,7 @@ if [ -n "$(git status --porcelain)" ]; then
 $(git status --short)"
 fi
 
+command -v git >/dev/null 2>&1 || die "git is not on PATH ($PATH)"
 git fetch --quiet origin "$BRANCH" || die "git fetch failed"
 LOCAL="$(git rev-parse HEAD)"
 REMOTE="$(git rev-parse "origin/$BRANCH")"
