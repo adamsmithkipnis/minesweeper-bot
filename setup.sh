@@ -148,25 +148,86 @@ else
   say "would run the test suite"
 fi
 
+# `launchctl bootout` returns before the job has finished unloading, and
+# bootstrapping into that gap fails with "Bootstrap failed: 5: Input/output
+# error" — leaving the service unloaded. So: only reload when the plist
+# actually changed, wait for the unload to complete, and retry.
+wait_until_gone() {
+  local target="$1" i
+  for i in $(seq 1 40); do
+    launchctl print "$target" >/dev/null 2>&1 || return 0
+    sleep 0.25
+  done
+  return 1
+}
+
+reload_service() {
+  local service="$1" plist="$2"
+  local target="gui/$UID_NUM/$service"
+  local loaded=0
+  launchctl print "$target" >/dev/null 2>&1 && loaded=1
+
+  if [ "$loaded" -eq 1 ]; then
+    launchctl bootout "$target" >/dev/null 2>&1 || true
+    wait_until_gone "$target" || say "  (still unloading; trying anyway)"
+  fi
+
+  local i
+  for i in 1 2 3; do
+    if launchctl bootstrap "gui/$UID_NUM" "$plist" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  # If it came back by itself in the meantime, a kick is enough.
+  launchctl kickstart -k "$target" >/dev/null 2>&1 && return 0
+  return 1
+}
+
 step "launchd jobs"
 run mkdir -p "$AGENTS"
+failed=""
 for service in "${SERVICES[@]}"; do
   template="$REPO_DIR/$service.plist"
   target="$AGENTS/$service.plist"
   [ -f "$template" ] || die "missing template $template"
+
   if [ "$DRY_RUN" -eq 1 ]; then
     say "would write $target with paths pointing at $REPO_DIR"
+    continue
+  fi
+
+  tmp="$(mktemp)"
+  /usr/bin/sed "s|/ABSOLUTE/PATH/TO/minesweeper-bot|$REPO_DIR|g" "$template" > "$tmp"
+
+  if [ -f "$target" ] && cmp -s "$tmp" "$target" \
+     && launchctl print "gui/$UID_NUM/$service" >/dev/null 2>&1; then
+    # Unchanged and already loaded: a kick avoids the unload race entirely.
+    rm -f "$tmp"
+    launchctl kickstart -k "gui/$UID_NUM/$service" >/dev/null 2>&1 \
+      && say "$service restarted" \
+      || { say "$service could not be restarted"; failed="$failed $service"; }
+    continue
+  fi
+
+  mv "$tmp" "$target"
+  if reload_service "$service" "$target"; then
+    say "$service installed"
   else
-    /usr/bin/sed "s|/ABSOLUTE/PATH/TO/minesweeper-bot|$REPO_DIR|g" \
-      "$template" > "$target"
+    say "$service FAILED to load"
+    failed="$failed $service"
   fi
-  # Reload so a changed plist actually takes effect.
-  if launchctl print "gui/$UID_NUM/$service" >/dev/null 2>&1; then
-    run launchctl bootout "gui/$UID_NUM/$service" || true
-  fi
-  run launchctl bootstrap "gui/$UID_NUM" "$target"
-  say "$service installed"
 done
+
+if [ -n "$failed" ]; then
+  printf '\n' >&2
+  for service in $failed; do
+    say "Could not load $service. Try it directly:"
+    say "    launchctl bootout gui/$UID_NUM/$service 2>/dev/null; \\"
+    say "    launchctl bootstrap gui/$UID_NUM $AGENTS/$service.plist"
+  done
+  die "one or more services are not loaded — the bot may be stopped"
+fi
 
 if [ "$DRY_RUN" -eq 1 ]; then
   printf '\nDry run complete; nothing changed.\n'

@@ -111,11 +111,45 @@ def variant_board() -> Image.Image:
     return img
 
 
+def variant_flag() -> Image.Image:
+    """The red flag on a raised tile.
+
+    Honest only since flagging shipped — before that it advertised a feature
+    the game did not have.
+    """
+    img = Image.new("RGB", (SIZE, SIZE), FACE)
+    draw = ImageDraw.Draw(img)
+    renderer._bevel(draw, (0, 0, SIZE, SIZE), int(SIZE * 0.055), raised=True)
+    renderer._draw_flag(draw, (0, 0, SIZE, SIZE))
+    return img
+
+
+def variant_flag_quad() -> Image.Image:
+    """A flag, a mine, and two numerals — the whole game in four squares."""
+    img = Image.new("RGB", (SIZE, SIZE), FACE)
+    draw = ImageDraw.Draw(img)
+    half = SIZE // 2
+    boxes = [(0, 0, half, half), (half, 0, SIZE, half),
+             (0, half, half, SIZE), (half, half, SIZE, SIZE)]
+    tile(draw, boxes[0], raised=False)
+    numeral(draw, boxes[0], 1)
+    tile(draw, boxes[1], raised=True)
+    renderer._draw_flag(draw, boxes[1])
+    draw.rectangle(boxes[2], fill=EXPLODED_CELL)
+    renderer._bevel(draw, boxes[2], 12, raised=False)
+    renderer._draw_mine(draw, boxes[2])
+    tile(draw, boxes[3], raised=False)
+    numeral(draw, boxes[3], 2)
+    return img
+
+
 VARIANTS = {
     "a-smiley": (variant_smiley, "the smiley button"),
     "b-mine": (variant_mine, "a mine on the red cell"),
     "c-quad": (variant_quad, "1, 2, a mine, and an unopened tile"),
     "d-board": (variant_board, "a 3x3 fragment of a position"),
+    "e-flag": (variant_flag, "the red flag on a raised tile"),
+    "f-flagquad": (variant_flag_quad, "a flag, a mine, and two numerals"),
 }
 
 
