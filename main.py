@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import random
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -42,6 +43,22 @@ scheduler = BlockingScheduler()
 # Post copy
 # ---------------------------------------------------------------------------
 
+def pick_hashtags(rng=None) -> list:
+    """The always-on tag, then a fresh random sample of the pool.
+
+    Posting the identical block of six tags every hour reads as a bot padding
+    for reach; drawing them fresh each time reaches more corners of the
+    network and looks like a person choosing. The game's own tag is never
+    dropped, so the account stays findable under one stable name.
+    """
+    rng = rng or random
+    always = config.HASHTAG_ALWAYS
+    pool = [tag for tag in config.HASHTAG_POOL
+            if tag.lower() != always.lower()]
+    picked = rng.sample(pool, min(config.HASHTAG_COUNT, len(pool)))
+    return ([always] if always else []) + picked
+
+
 def _with_tags(text: str, tags: list | None = None) -> str:
     """Append hashtags, stopping at the first one that will not fit.
 
@@ -50,7 +67,7 @@ def _with_tags(text: str, tags: list | None = None) -> str:
     can never be the reason a post gets clamped.
     """
     out = text
-    for i, tag in enumerate(config.HASHTAGS if tags is None else tags):
+    for i, tag in enumerate(pick_hashtags() if tags is None else tags):
         candidate = f"{out}{chr(10) if i == 0 else ' '}{tag}"
         if len(candidate) > bluesky.POST_LIMIT:
             break

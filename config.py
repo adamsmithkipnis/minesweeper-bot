@@ -47,11 +47,20 @@ LOG_PATH = os.environ.get("LOG_PATH", "")
 POST_MODE = os.environ.get("POST_MODE", "live")
 DRY_DIR = os.environ.get("DRY_DIR", "dry-run")
 
-# Appended to posts in this order, and only while they still fit under the
-# 300-character limit — so a tag can never push the board information out.
-HASHTAGS = os.environ.get(
-    "HASHTAGS",
-    "#Minesweeper #gamedev #indiedev #solodev #indiegames #play",
+# Hashtags. One is always present so the game is findable under its own name;
+# the rest are sampled fresh per post from a larger pool, so the account does
+# not post the identical block of tags 24 times a day. Tags are appended only
+# while they still fit under the 300-character limit, so reach can never push
+# the board information out of a post.
+HASHTAG_ALWAYS = os.environ.get("HASHTAG_ALWAYS", "#Minesweeper")
+HASHTAG_COUNT = int(os.environ.get("HASHTAG_COUNT", "5"))
+HASHTAG_POOL = os.environ.get(
+    "HASHTAG_POOL",
+    "#gamedev #indiedev #solodev #indiegames #indiegame #gamedevelopment "
+    "#puzzle #puzzlegames #logicpuzzles #braingames "
+    "#retrogaming #retrogames #classicgames "
+    "#play #playtogether #crowdplay #dailygame #gamenight "
+    "#bots #botsky #bskygames #opensource #python",
 ).split()
 
 # The one tag that goes on replies to individual followers. Six hashtags in a

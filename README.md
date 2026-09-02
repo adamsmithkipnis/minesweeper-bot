@@ -101,6 +101,15 @@ stall the board forever.
 Claims are scored when the cell is opened, or against the real layout when the
 run ends, and the game-over post names who read the mines best on that board.
 
+### Hashtags
+
+`#Minesweeper` is on every post so the game stays findable under one name.
+Five more are sampled fresh per post from a pool of 23 (`HASHTAG_POOL` in
+`.env`), because the same block of six tags 24 times a day reads as a bot
+padding for reach. Tags are appended only while they still fit under 300
+characters — content is built first, so reach can never be the reason a post
+gets clamped. Replies to individual followers carry one tag, not six.
+
 ## Layout
 
 | File | Purpose |
