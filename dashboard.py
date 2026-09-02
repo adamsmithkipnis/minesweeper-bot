@@ -122,6 +122,10 @@ def snapshot() -> dict:
     standings = votes.breakdown(replies, already_open, state.rows, state.cols)
     winner = votes.tally(replies, already_open, state.rows, state.cols)
 
+    flags = {c for c in db.flagged_coords(state.game_id, config.FLAG_QUORUM)
+             if not state.coord_is_revealed(c)}
+    flag_counts = db.flag_counts(state.game_id)
+
     data["board"] = {
         "game_id": state.game_id,
         "turn": state.turn_number,
@@ -133,7 +137,10 @@ def snapshot() -> dict:
         "last_source": state.last_source,
         "post_uri": state.last_post_uri,
         "next_turn_at": next_turn_at(state),
-        "grid": renderer.display_grid(state),
+        "grid": renderer.display_grid(state, flags),
+        "flags": sorted(flags),
+        "flag_counts": flag_counts,
+        "flag_scores": db.flag_scores(state.game_id),
         "rows": game.row_letters(state.rows),
         # The solver's read on the position — the reason to run this page.
         "solver": {
@@ -167,7 +174,10 @@ def board_png():
     state = db.load_state()
     if state is None:
         return Response("no board", status=404)
-    return Response(renderer.render_board(state, highlight=state.last_coord),
+    flags = {c for c in db.flagged_coords(state.game_id, config.FLAG_QUORUM)
+             if not state.coord_is_revealed(c)}
+    return Response(renderer.render_board(state, highlight=state.last_coord,
+                                          flags=flags),
                     mimetype="image/png")
 
 
@@ -262,6 +272,28 @@ TEMPLATE = """
       </div>
       {% else %}
       <p class="note">No votes yet.</p>
+      {% endif %}
+
+      <h2>Flags</h2>
+      {% if board.flags %}
+      <p><code>{{ board.flags|join(', ') }}</code></p>
+      <p class="note">
+        {% set right = board.flags|select('in', board.solver.mines)|list %}
+        {{ right|length }} of {{ board.flags|length }} are provably mines.
+        The board draws them all the same — a wrong flag must look exactly
+        like a right one.
+      </p>
+      {% else %}
+      <p class="note">Nobody has flagged anything on this board.</p>
+      {% endif %}
+      {% if board.flag_scores %}
+      <table>
+        <tr><th>Flagger</th><th>Right</th><th>Scored</th></tr>
+        {% for row in board.flag_scores %}
+        <tr><td>{{ row.handle }}</td><td class="ok">{{ row.hits }}</td>
+            <td>{{ row.total }}</td></tr>
+        {% endfor %}
+      </table>
       {% endif %}
 
       <h2>Solver</h2>

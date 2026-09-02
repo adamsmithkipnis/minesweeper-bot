@@ -5,6 +5,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import config       # noqa: E402
+import db       # noqa: E402
 import game      # noqa: E402
 import solver    # noqa: E402
 import votes     # noqa: E402

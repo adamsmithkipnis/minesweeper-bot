@@ -87,19 +87,39 @@ def _credit_line(vote, source: str) -> str:
             f"so I played it myself.")
 
 
-def _ask_line(state: game.GameState) -> str:
+def _ask_line(state: game.GameState, flags=(), teach_flagging: bool = False) -> str:
+    """The prompt. Nobody flags a cell unless something invites them to.
+
+    Voting is discoverable only because the post asks for a coordinate, and no
+    amount of forgiving parsing fixes an instruction nobody gave. So the ask
+    rotates: on turns where flagging is worth teaching it says so, and the
+    hashtags give way to make room, because a prompt beats reach.
+    """
     left = state.total_safe - len(state.revealed)
     last = f"{game.row_letters(state.rows)[-1]}{state.cols}"
-    return (f"{_plural(left, 'cell')} left, {state.mine_count} mines.\n"
-            f"Reply with a coordinate, A1 to {last}.\n"
-            f"{config.TURN_MINUTES} min.")
+    counted = (f"{_plural(left, 'cell')} left, {state.mine_count} mines"
+               + (f", {len(flags)} flagged.\n" if flags else ".\n"))
+    if teach_flagging:
+        ask = (f"Reply a coordinate to open it, A1 to {last} — "
+               f"or 'flag' one you think is a mine.\n")
+    else:
+        ask = f"Reply with a coordinate, A1 to {last}.\n"
+    return f"{counted}{ask}{config.TURN_MINUTES} min."
 
 
-def build_turn_text(state: game.GameState, coord: str, vote, source: str) -> str:
+def _should_teach_flagging(state: game.GameState, flags) -> bool:
+    """Teach while nobody is flagging, then every third turn as a reminder."""
+    if not flags:
+        return True
+    return state.turn_number % 3 == 0
+
+
+def build_turn_text(state: game.GameState, coord: str, vote, source: str,
+                    flags=()) -> str:
     return _with_tags(
         f"Turn {state.turn_number} · {coord} {_outcome_phrase(state, coord)}\n"
         f"{_credit_line(vote, source)}\n\n"
-        f"{_ask_line(state)}")
+        f"{_ask_line(state, flags, _should_teach_flagging(state, flags))}")
 
 
 def build_opening_text(state: game.GameState, record: dict) -> str:
@@ -113,11 +133,12 @@ def build_opening_text(state: game.GameState, record: dict) -> str:
         f"I opened {state.last_coord} to start us off. "
         f"You pick the rest — one mine ends the run.\n"
         f"{scoreline}\n"
-        f"{_ask_line(state)}")
+        f"{_ask_line(state, teach_flagging=True)}")
 
 
 def build_gameover_text(state: game.GameState, coord: str, vote, source: str,
-                        had_safe: str, record: dict, crowd_moves: int = 0) -> str:
+                        had_safe: str, record: dict, crowd_moves: int = 0,
+                        flag_line: str = "") -> str:
     opened, total = len(state.revealed), state.total_safe
     if state.status == game.CLEARED:
         head = (f"🎉 BOARD CLEARED in {_plural(state.turn_number, 'turn')}!\n"
@@ -130,12 +151,44 @@ def build_gameover_text(state: game.GameState, coord: str, vote, source: str,
         if had_safe:
             head += f" {had_safe} was provably safe."
 
-    yours = (f"You called {crowd_moves} of "
-             f"{_plural(state.turn_number, 'move')}.\n" if crowd_moves else "")
-    tail = (f"{yours}"
-            f"All time: {record['cleared']} cleared, {record['exploded']} lost.\n"
-            f"New board in {_restart_phrase()}.")
-    return _with_tags(f"{head}\n{_credit_line(vote, source)}\n\n{tail}")
+    # The result, who called it, and when the next board starts are the parts
+    # that must survive. Recognition lines are added only while the whole post
+    # still fits — otherwise the clamp eats the end of the post instead, which
+    # is how "New board in an hour" became "New bo…".
+    required = (f"All time: {record['cleared']} cleared, "
+                f"{record['exploded']} lost.\n"
+                f"New board in {_restart_phrase()}.")
+    optional = [
+        f"You called {crowd_moves} of {_plural(state.turn_number, 'move')}."
+        if crowd_moves else "",
+        flag_line,
+    ]
+
+    kept = []
+    for line in filter(None, optional):
+        candidate = kept + [line]
+        body = (f"{head}\n{_credit_line(vote, source)}\n\n"
+                + "\n".join(candidate + [required]))
+        if len(body) <= bluesky.POST_LIMIT:
+            kept = candidate
+    return _with_tags(f"{head}\n{_credit_line(vote, source)}\n\n"
+                      + "\n".join(kept + [required]))
+
+
+def build_flag_reply(coords: list, total_flagged: int) -> str:
+    """Confirm a flag publicly.
+
+    This is what breaks the chicken and egg: flags on the board teach the
+    syntax, but somebody has to flag first. Answering the first person to try
+    it shows everyone else in the thread that it worked.
+    """
+    which = coords[0] if len(coords) == 1 else ", ".join(coords[:3])
+    return _with_tags(
+        f"🚩 Flagged {which}. It shows on the board and costs no turn — "
+        f"you can flag and still vote to open somewhere else in the same "
+        f"reply.\n\n"
+        f"{_plural(total_flagged, 'cell')} flagged so far.",
+        tags=[config.REPLY_HASHTAG])
 
 
 def build_credit_reply(state: game.GameState, coord: str, vote) -> str:
@@ -150,6 +203,22 @@ def build_credit_reply(state: game.GameState, coord: str, vote) -> str:
         f"{outcome}\n\n"
         f"({vote.votes} of {vote.total_voters} votes)",
         tags=[config.REPLY_HASHTAG])
+
+
+def build_flag_line(scores: list) -> str:
+    """Who read the mines correctly on this board.
+
+    Per board rather than all time: recognition without a leaderboard to
+    maintain, and nobody accumulates a losing record they cannot shake.
+    """
+    scored = [s for s in scores if s["hits"]]
+    if not scored:
+        return ""
+    best = scored[0]
+    line = f"🚩 @{best['handle']} called {best['hits']} of {best['total']} mines"
+    if len(scored) > 1:
+        line += f", then @{scored[1]['handle']} ({scored[1]['hits']})"
+    return line + "."
 
 
 def _restart_phrase() -> str:
@@ -174,13 +243,85 @@ def _remember(uri: str, kind: str, game_id: int, turn: int | None = None) -> Non
 
 
 def _post_board(state: game.GameState, text: str, kind: str,
-                extra_dids: dict | None = None) -> str:
-    image = renderer.render_board(state, highlight=state.last_coord)
-    alt = renderer.build_alt_text(state)
+                extra_dids: dict | None = None, flags=()) -> str:
+    image = renderer.render_board(state, highlight=state.last_coord, flags=flags)
+    alt = renderer.build_alt_text(state, flags)
     uri = bluesky.post_with_image(text, image, alt=alt, kind=kind,
                                   extra_dids=extra_dids)
     _remember(uri, kind, state.game_id, state.turn_number)
     return uri
+
+
+def _record_flags(state: game.GameState, claimed: dict, withdrawn: dict) -> None:
+    """Persist this turn's mine claims. Never allowed to break a turn."""
+    try:
+        for coord, repliers in claimed.items():
+            for reply in repliers:
+                db.add_flag(state.game_id, coord, reply.did, reply.handle,
+                            state.turn_number)
+        for coord, repliers in withdrawn.items():
+            for reply in repliers:
+                db.remove_flag(state.game_id, coord, reply.did)
+        if claimed or withdrawn:
+            logger.info("Flags: %d claimed, %d withdrawn",
+                        sum(len(v) for v in claimed.values()),
+                        sum(len(v) for v in withdrawn.values()))
+    except Exception:
+        logger.exception("Failed to record flags")
+
+
+def _resolve_flags(state: game.GameState, coord: str, result: str,
+                   revealed_before: set, final: bool = False) -> None:
+    """Score claims the board has just settled.
+
+    Opening a cell disproves any flag on it; hitting a mine proves one. When
+    the board ends, everything still outstanding is scored against the real
+    layout — which is the only moment the hidden state is allowed to touch
+    the flag record.
+    """
+    try:
+        resolutions = {game.index_to_coord(*cell): False
+                       for cell in set(state.revealed) - revealed_before}
+        if result == game.MINE:
+            resolutions[coord] = True
+        if final:
+            for outstanding in db.flag_counts(state.game_id):
+                try:
+                    cell = game.coord_to_index(outstanding)
+                except ValueError:
+                    continue
+                resolutions.setdefault(outstanding, cell in state.mine_cells)
+        scored = db.resolve_flags(state.game_id, resolutions)
+        if scored:
+            logger.info("Scored %d flag claim(s)", scored)
+    except Exception:
+        logger.exception("Failed to resolve flags")
+
+
+def _confirm_first_flag(state: game.GameState, claimed: dict) -> None:
+    """Answer the first person to flag anything on this board.
+
+    Flags on the board teach the syntax, but somebody has to go first. A
+    public confirmation shows the rest of the thread that it worked.
+    """
+    earliest, coords = None, []
+    for coord, repliers in claimed.items():
+        for reply in repliers:
+            if earliest is None or (reply.created_at or "") < (earliest.created_at or ""):
+                earliest = reply
+    if earliest is None or not earliest.uri:
+        return
+    coords = sorted(c for c, rs in claimed.items()
+                    if any(r.did == earliest.did for r in rs))
+    try:
+        uri = bluesky.post_reply(
+            build_flag_reply(coords, len(db.flag_counts(state.game_id))),
+            parent_uri=earliest.uri, parent_cid=earliest.cid,
+            root_uri=earliest.root_uri, root_cid=earliest.root_cid,
+            kind="flagack")
+        _remember(uri, "flagack", state.game_id, state.turn_number)
+    except Exception:
+        logger.exception("Failed to confirm the first flag")
 
 
 def _fetch_replies(uri: str) -> list:
@@ -218,10 +359,16 @@ def _game_tick() -> None:
     position = solver.Position.from_state(state)
     analysis = solver.analyze(position)
 
-    # 1. Read the crowd.
+    # 1. Read the crowd. One reply can do both jobs: flagging costs no turn,
+    #    so "C3 is a mine, so D4 is safe — D4" flags C3 and votes for D4.
     already_open = {game.index_to_coord(r, c) for (r, c) in state.revealed}
-    vote = votes.tally(_fetch_replies(state.last_post_uri), already_open,
-                       state.rows, state.cols)
+    replies = _fetch_replies(state.last_post_uri)
+    vote = votes.tally(replies, already_open, state.rows, state.cols)
+
+    first_flag_of_the_board = not db.flag_counts(state.game_id)
+    claimed, withdrawn = votes.collect_flags(replies, already_open,
+                                             state.rows, state.cols)
+    _record_flags(state, claimed, withdrawn)
 
     # 2. Decide. Below the quorum the crowd has not actually agreed on
     #    anything — a single stray vote would carry the turn — so the bot
@@ -240,6 +387,7 @@ def _game_tick() -> None:
                     " — no votes")
 
     index = game.coord_to_index(coord)
+    revealed_before = set(state.revealed)
     was_provably_safe = index in analysis.safe
     # Named before the move, for the post-mortem if this turn ends the run.
     safe_alternative = (game.index_to_coord(*sorted(analysis.safe)[0])
@@ -265,6 +413,11 @@ def _game_tick() -> None:
     if source == "crowd" and vote and vote.caller:
         extra[vote.caller.handle] = vote.caller.did
 
+    # Flags shown on the board are the crowd's claims and nothing more: a
+    # right flag and a wrong one are drawn identically until the cell opens.
+    flags = {c for c in db.flagged_coords(state.game_id, config.FLAG_QUORUM)
+             if not state.coord_is_revealed(c)}
+
     finished = state.status != game.ACTIVE
     record = db.get_record()
     if finished:
@@ -273,16 +426,20 @@ def _game_tick() -> None:
         # move that ended the board.
         crowd_moves = sum(1 for m in db.get_moves(state.game_id, limit=500)
                           if m["source"] == "crowd") + (source == "crowd")
+        # Score every outstanding claim now that the layout is known — this
+        # is the moment a flag stops being an opinion.
+        _resolve_flags(state, coord, result, revealed_before, final=True)
+        flag_line = build_flag_line(db.flag_scores(state.game_id))
         text = build_gameover_text(state, coord, vote, source,
                                    safe_alternative if result == game.MINE else "",
-                                   record, crowd_moves)
+                                   record, crowd_moves, flag_line)
         kind = "gameover"
     else:
-        text = build_turn_text(state, coord, vote, source)
+        text = build_turn_text(state, coord, vote, source, flags)
         kind = "turn"
 
     try:
-        uri = _post_board(state, text, kind, extra_dids=extra)
+        uri = _post_board(state, text, kind, extra_dids=extra, flags=flags)
     except Exception:
         logger.exception("Posting failed; turn not saved and will be replayed")
         return
@@ -300,7 +457,15 @@ def _game_tick() -> None:
         except Exception:
             logger.exception("Failed to post credit reply")
 
-    # 6. Persist.
+    # 6. Score the flags this turn settled, then persist. Resolution happens
+    #    after the post so a failed turn replays cleanly instead of scoring
+    #    people against a move that never reached anybody.
+    if not finished:
+        _resolve_flags(state, coord, result, revealed_before)
+
+    if first_flag_of_the_board and claimed:
+        _confirm_first_flag(state, claimed)
+
     try:
         db.record_move(state, coord, result, source,
                        caller=state.last_caller, votes=state.last_votes,

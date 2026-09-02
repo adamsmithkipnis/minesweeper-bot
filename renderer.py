@@ -31,6 +31,7 @@ import game
 HIDDEN = "?"
 MINE = "*"
 EXPLODED = "X"
+FLAG = "F"
 
 # The classic palette. Everything is made of one silver, and the illusion of
 # depth is entirely bevels: white on the top-left, mid-grey on the bottom
@@ -84,7 +85,7 @@ def _font(size: int):
     return ImageFont.load_default()
 
 
-def display_grid(state: game.GameState) -> list:
+def display_grid(state: game.GameState, flags=()) -> list:
     """The board as tokens, from the point of view of somebody reading the post.
 
     Hidden cells are '?' while the game is live — including the mines. The
@@ -104,6 +105,10 @@ def display_grid(state: game.GameState) -> list:
                 row.append(EXPLODED
                            if game.index_to_coord(r, c) == state.exploded_cell
                            else MINE)
+            elif game.index_to_coord(r, c) in flags:
+                # A flag is what the crowd claims, never what the board knows.
+                # Right and wrong flags look identical until the cell opens.
+                row.append(FLAG)
             else:
                 row.append(HIDDEN)
         grid.append(row)
@@ -175,12 +180,15 @@ def _counter(draw, box, value):
     """The three-digit red readout, zero-padded like the original."""
     x0, y0, x1, y1 = box
     draw.rectangle(box, fill=LED_BG)
-    text = f"{max(0, min(999, int(value))):03d}"
+    # The original goes negative when you over-flag, and so does this.
+    value = max(-99, min(999, int(value)))
+    text = f"-{abs(value):02d}" if value < 0 else f"{value:03d}"
     gap = 4
     dw = (x1 - x0 - gap * 4) / 3
     for i, char in enumerate(text):
         dx = x0 + gap + i * (dw + gap)
-        _digit(draw, (dx, y0 + gap, dx + dw, y1 - gap), int(char))
+        _digit(draw, (dx, y0 + gap, dx + dw, y1 - gap),
+               "-" if char == "-" else int(char))
 
 
 def _smiley(draw, box, mood):
@@ -218,6 +226,19 @@ def _smiley(draw, box, mood):
                  fill=TEXT, width=3)
 
 
+def _draw_flag(draw, box):
+    """The classic red pennant on a black pole."""
+    x0, y0, x1, y1 = box
+    w, h = x1 - x0, y1 - y0
+    pole_x = x0 + w * 0.56
+    draw.line((pole_x, y0 + h * 0.24, pole_x, y0 + h * 0.72),
+              fill=TEXT, width=max(2, int(w * 0.055)))
+    draw.rectangle((x0 + w * 0.28, y0 + h * 0.70, x0 + w * 0.72, y0 + h * 0.78),
+                   fill=TEXT)
+    draw.polygon([(pole_x, y0 + h * 0.22), (pole_x, y0 + h * 0.50),
+                  (x0 + w * 0.26, y0 + h * 0.36)], fill="#FF0000")
+
+
 def _draw_mine(draw, box):
     """Black body, eight spikes, one white glint — as it always was."""
     x0, y0, x1, y1 = box
@@ -239,9 +260,10 @@ def _draw_mine(draw, box):
 # Image
 # ---------------------------------------------------------------------------
 
-def render_board(state: game.GameState, highlight: str = "") -> bytes:
+def render_board(state: game.GameState, highlight: str = "",
+                 flags=()) -> bytes:
     """Render the board to PNG bytes. `highlight` rings a coordinate."""
-    grid = display_grid(state)
+    grid = display_grid(state, flags)
     grid_w, grid_h = state.cols * CELL, state.rows * CELL
 
     grid_x = OUTER_BEVEL + PAD + LABEL_LEFT + PANEL_BEVEL
@@ -269,7 +291,7 @@ def render_board(state: game.GameState, highlight: str = "") -> bytes:
     counter_w, counter_h = 108, HEADER_H - inset * 2
     _counter(draw, (hx0 + inset, hy0 + inset,
                     hx0 + inset + counter_w, hy0 + inset + counter_h),
-             state.mine_count)
+             state.mine_count - len(flags))
     _counter(draw, (hx1 - inset - counter_w, hy0 + inset,
                     hx1 - inset, hy0 + inset + counter_h),
              state.turn_number)
@@ -302,9 +324,11 @@ def render_board(state: game.GameState, highlight: str = "") -> bytes:
             box = (x0, y0, x0 + CELL, y0 + CELL)
             token = grid[r][c]
 
-            if token == HIDDEN:
+            if token in (HIDDEN, FLAG):
                 draw.rectangle(box, fill=FACE)
                 _bevel(draw, box, TILE_BEVEL, raised=True)
+                if token == FLAG:
+                    _draw_flag(draw, box)
                 continue
 
             # Opened cells are flat, separated by a single grey rule — the
@@ -339,7 +363,7 @@ def render_board(state: game.GameState, highlight: str = "") -> bytes:
 ALT_LIMIT = 1800     # Bluesky allows more; this leaves headroom.
 
 
-def build_alt_text(state: game.GameState) -> str:
+def build_alt_text(state: game.GameState, flags=()) -> str:
     """Describe the board completely enough to play from.
 
     A 9x9 position fits in a few hundred characters, so unlike the Battleship
@@ -347,7 +371,7 @@ def build_alt_text(state: game.GameState) -> str:
     screen-reader user can reconstruct the grid exactly and vote on the same
     footing as everyone else.
     """
-    grid = display_grid(state)
+    grid = display_grid(state, flags)
     letters = game.row_letters(state.rows)
     opened, total = len(state.revealed), state.total_safe
 
@@ -357,10 +381,13 @@ def build_alt_text(state: game.GameState) -> str:
             f"{state.rows} by {state.cols} grid, rows A to {letters[-1]}, "
             f"columns 1 to {state.cols}. "
             f"{state.mine_count} mines. "
-            f"{opened} of {total} safe cells opened.")
+            f"{opened} of {total} safe cells opened"
+            + (f", {len(flags)} flagged." if flags else "."))
 
     legend = ("Reading each row left to right: a digit is how many mines touch "
               "that cell, 0 is an opened blank, ? is still hidden")
+    if flags:
+        legend += ", F is a cell somebody has flagged as a mine"
     if state.status != game.ACTIVE:
         legend += ", * is a mine, X is the mine that was hit"
     legend += "."

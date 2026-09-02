@@ -30,15 +30,22 @@ _VOTE_WORDS = (
 # about, not chosen.
 _AVOID_WORDS = (
     r"not|don'?t|do not|cannot|can'?t|never|avoid|isn'?t|except|but not|skip|"
-    r"flag|flagging|flagged|careful|beware|steer clear of"
+    r"flag|flagging|flagged|careful|beware|steer clear of|mine at|bomb at"
 )
+
+# The subset of warnings that are a positive claim "there is a mine here".
+# "flag C3" is one; "careful with C3" is not — the second is a hunch about
+# risk, and turning it into a mine claim would put words in someone's mouth.
+_FLAG_WORDS = r"flag|flagging|flagged|mine at|bomb at"
+_FLAG_BEFORE = re.compile(rf"\b(?:{_FLAG_WORDS})[^A-Za-z0-9]{{0,6}}$", re.IGNORECASE)
 
 # "D4 is a mine", "D4 = bomb", "D4 must be a mine" — an assertion about a
 # cell, never a request to open it.
 _IS_MINE = re.compile(
-    r"\s*(?:is|=|looks|seems|has to be|must be|might be|could be|:)\s*"
-    r"(?:a\s+|an\s+|definitely\s+|probably\s+|clearly\s+)*"
-    r"(?:mine|bomb|trap|dangerous|unsafe)",
+    r"\s*(?:is|are|=|looks|look|seems|seem|has to be|have to be|must be|"
+    r"might be|could be|:)\s*"
+    r"(?:a\s+|an\s+|all\s+|both\s+|definitely\s+|probably\s+|clearly\s+)*"
+    r"(?:mines?|bombs?|traps?|dangerous|unsafe)",
     re.IGNORECASE,
 )
 
@@ -63,6 +70,22 @@ _NEGATION_BEFORE = re.compile(
 )
 
 _LOOKBACK = 24      # characters of context examined on either side
+
+# "flag C3 and D5" flags both. A flag carries to the next coordinate only
+# across a bare connector — so "flag C3 and I vote D4" does not, because
+# there are real words in between.
+_CONNECTOR = re.compile(r"^[ \t,&+/–—-]*(?:and|or|also|plus)?[ \t,&+/–—-]*$",
+                        re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class Mention:
+    """One coordinate found in a reply, and what the writer meant by it."""
+    coord: str
+    is_choice: bool = False     # introduced by a voting word
+    is_warning: bool = False    # being warned about rather than chosen
+    is_flag: bool = False       # a positive claim that it holds a mine
+    is_unflag: bool = False     # a request to take a mark off
 
 
 @dataclass(frozen=True)
@@ -101,32 +124,50 @@ def _vote_word_pattern() -> re.Pattern:
 
 
 def find_mentions(text: str, rows: int, cols: int) -> list:
-    """Every coordinate in `text` as (coord, is_choice, is_warning).
-
-    `is_choice` means a voting word introduces it. `is_warning` means the
-    writer is calling it a mine or telling us to stay away.
-    """
+    """Every coordinate in `text` as a Mention, with what the writer meant."""
     text = text or ""
     pattern = coordinate_pattern(rows, cols)
     vote_word = _vote_word_pattern()
-    out = []
+    out, spans = [], []
     for match in pattern.finditer(text):
         coord = f"{match.group(1).upper()}{match.group(2)}"
         before = text[max(0, match.start() - _LOOKBACK):match.start()]
         after = text[match.end():match.end() + _LOOKBACK]
 
-        undo = bool(_UNDO_BEFORE.search(before))
-        warning = not undo and (
-            bool(_IS_MINE.match(after))
-            or bool(_NEGATION_BEFORE.search(before))
-            or bool(_DANGER_BEFORE.search(before))
-            or bool(_DANGER_AFTER.match(after))
-        )
-        if undo:
-            # Neither a vote nor a warning: it is a request about a mark.
+        if _UNDO_BEFORE.search(before):
+            out.append(Mention(coord, is_unflag=True))
+            spans.append((match.start(), match.end()))
             continue
+
+        claims_mine = (bool(_IS_MINE.match(after))
+                       or bool(_FLAG_BEFORE.search(before))
+                       or bool(_DANGER_BEFORE.search(before))
+                       or bool(_DANGER_AFTER.match(after)))
+        warning = claims_mine or bool(_NEGATION_BEFORE.search(before))
         choice = bool(vote_word.search(before)) and not warning
-        out.append((coord, choice, warning))
+        out.append(Mention(coord, is_choice=choice, is_warning=warning,
+                           is_flag=claims_mine))
+        spans.append((match.start(), match.end()))
+
+    # Second pass: a flag carries across a bare connector to its neighbours,
+    # which is how people list several at once — "flag C3 and D5" forwards,
+    # "C3 and D4 are mines" backwards.
+    def _joined(i, j):
+        return _CONNECTOR.match(text[spans[i][1]:spans[j][0]]) is not None
+
+    for _ in range(len(out)):          # settle chains like "C3, D4 and E5"
+        changed = False
+        for i in range(len(out)):
+            if out[i].is_flag or out[i].is_unflag:
+                continue
+            neighbours = [j for j in (i - 1, i + 1) if 0 <= j < len(out)]
+            for j in neighbours:
+                if out[j].is_flag and _joined(min(i, j), max(i, j)):
+                    out[i] = Mention(out[i].coord, is_warning=True, is_flag=True)
+                    changed = True
+                    break
+        if not changed:
+            break
     return out
 
 
@@ -139,21 +180,53 @@ def parse_vote(text: str, rows: int, cols: int) -> str | None:
       3. the last coordinate mentioned — people finish on their choice.
     Coordinates the writer is warning about are never candidates.
     """
-    mentions = find_mentions(text, rows, cols)
-    candidates = [(coord, choice) for coord, choice, warning in mentions
-                  if not warning]
+    candidates = [m for m in find_mentions(text, rows, cols)
+                  if not m.is_warning and not m.is_unflag]
     if not candidates:
         return None
 
-    chosen = [coord for coord, choice in candidates if choice]
+    chosen = [m.coord for m in candidates if m.is_choice]
     if chosen:
         return chosen[-1]
 
-    distinct = {coord for coord, _ in candidates}
+    distinct = {m.coord for m in candidates}
     if len(distinct) == 1:
-        return candidates[0][0]
+        return candidates[0].coord
 
-    return candidates[-1][0]
+    return candidates[-1].coord
+
+
+def parse_flags(text: str, rows: int, cols: int) -> tuple:
+    """(flagged, unflagged) coordinate sets from one reply.
+
+    Flagging is free: it costs no turn, so a reply can flag a cell and vote to
+    open another in the same breath — which is exactly how people write when
+    they are reasoning out loud.
+    """
+    flagged, unflagged = set(), set()
+    for mention in find_mentions(text, rows, cols):
+        if mention.is_unflag:
+            unflagged.add(mention.coord)
+        elif mention.is_flag:
+            flagged.add(mention.coord)
+    return flagged, unflagged
+
+
+def collect_flags(replies: list, resolved: set, rows: int, cols: int) -> tuple:
+    """Flag and unflag claims across replies, as {coord: [Reply, ...]}.
+
+    A person may flag several cells in one reply — unlike voting, where they
+    get one say. Cells that are already open are ignored: a flag on a revealed
+    cell is a misreading, not a prediction.
+    """
+    flags, unflags = {}, {}
+    for reply in sorted(replies, key=lambda r: r.created_at or ""):
+        flagged, unflagged = parse_flags(reply.text, rows, cols)
+        for coord in flagged - resolved:
+            flags.setdefault(coord, []).append(reply)
+        for coord in unflagged - resolved:
+            unflags.setdefault(coord, []).append(reply)
+    return flags, unflags
 
 
 @dataclass

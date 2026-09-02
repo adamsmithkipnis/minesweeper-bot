@@ -75,6 +75,9 @@ def install_fake_crowd(voters: int, skill: float, rng: random.Random) -> None:
                                                    state.cols))] or hidden
         safe = sorted(analysis.safe)
 
+        # Cells the solver can prove are mines, for realistic flagging — plus
+        # the occasional wrong flag, which is the interesting case.
+        provable = sorted(analysis.mines)
         out = []
         for i in range(voters):
             cell = (rng.choice(safe) if safe and rng.random() < skill
@@ -88,6 +91,15 @@ def install_fake_crowd(voters: int, skill: float, rng: random.Random) -> None:
                 f"the 1 at {game.index_to_coord(*rng.choice(list(state.revealed)))} "
                 f"means {coord} is clear — {coord}",
             ])
+            if rng.random() < 0.35:
+                pool = provable if (provable and rng.random() < skill) else hidden
+                mark = game.index_to_coord(*rng.choice(pool))
+                if mark != coord:
+                    text = rng.choice([
+                        f"{mark} is a mine, so {text}",
+                        f"flag {mark}. {text}",
+                        f"🚩 {mark} — {text}",
+                    ])
             out.append(votes.Reply(
                 did=f"did:plc:voter{i}", handle=f"voter{i}.bsky.social",
                 text=text, uri=f"at://did:plc:voter{i}/app.bsky.feed.post/{i}",
@@ -134,22 +146,32 @@ def main() -> int:
 
     state = db.load_state()
     posts = sorted(f for f in os.listdir(args.out) if f.endswith(".txt"))
-    longest = 0
+    longest, truncated = 0, []
     for name in posts:
         with open(os.path.join(args.out, name)) as handle:
-            body = handle.read().split("\n--- ")[0]
-        longest = max(longest, len(body.rstrip("\n")))
+            body = handle.read().split("\n--- ")[0].rstrip("\n")
+        longest = max(longest, len(body))
+        # A length check alone can never catch this: clamp() enforces the
+        # limit by cutting, so an over-long post arrives here at exactly 300
+        # with its last line amputated.
+        if body.endswith("…"):
+            truncated.append(name)
 
     print(f"\nBoard {state.game_id} ended {state.status} on turn "
           f"{state.turn_number}: {len(state.revealed)} of {state.total_safe} "
           f"cells cleared")
     print(f"{len(posts)} posts written to {args.out}")
-    print(f"longest post: {longest} chars (limit 300)")
+    print(f"longest post: {longest} chars (limit 300), "
+          f"{len(truncated)} clamped")
 
     moves = db.get_moves()
     crowd = [m for m in moves if m["source"] == "crowd"]
     print(f"{len(crowd)} of {len(moves)} moves came from the crowd")
 
+    if truncated:
+        print(f"FAIL: {len(truncated)} post(s) were clamped mid-sentence: "
+              f"{', '.join(truncated[:3])}")
+        return 1
     if longest > 300:
         print("FAIL: a post exceeded the character limit")
         return 1

@@ -62,6 +62,23 @@ CREATE TABLE IF NOT EXISTS moves (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Crowd mine-claims. Flagging costs no turn, so this is a parallel record to
+-- moves: several people may flag the same cell, and each claim is scored on
+-- its own once the cell is resolved.
+CREATE TABLE IF NOT EXISTS flags (
+    id INTEGER PRIMARY KEY,
+    game_id INTEGER,
+    coord TEXT,
+    did TEXT,
+    handle TEXT,
+    turn_number INTEGER,
+    correct INTEGER,          -- NULL until the cell is opened or the board ends
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_flags_one_per_person
+    ON flags (game_id, coord, did);
+
 -- Every post the bot creates, so a reset deletes exactly the bot's own posts
 -- instead of indiscriminately emptying the account.
 CREATE TABLE IF NOT EXISTS posts (
@@ -288,6 +305,84 @@ def get_history(limit: int = 20) -> list:
 
 
 # ---------------------------------------------------------------------------
+# Flags
+# ---------------------------------------------------------------------------
+
+def add_flag(game_id: int, coord: str, did: str, handle: str,
+             turn_number: int) -> None:
+    """Record one person's claim that `coord` holds a mine. Idempotent."""
+    with _connect() as conn:
+        conn.execute(
+            """INSERT OR IGNORE INTO flags
+               (game_id, coord, did, handle, turn_number)
+               VALUES (?, ?, ?, ?, ?)""",
+            (game_id, coord, did, handle, turn_number))
+
+
+def remove_flag(game_id: int, coord: str, did: str) -> None:
+    """Take back an unresolved claim. A scored one stays on the record."""
+    with _connect() as conn:
+        conn.execute(
+            "DELETE FROM flags WHERE game_id = ? AND coord = ? AND did = ? "
+            "AND correct IS NULL", (game_id, coord, did))
+
+
+def flagged_coords(game_id: int, quorum: int = 1) -> set:
+    """Cells currently carrying at least `quorum` unresolved flags."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT coord, COUNT(*) n FROM flags "
+            "WHERE game_id = ? AND correct IS NULL GROUP BY coord "
+            "HAVING n >= ?", (game_id, quorum)).fetchall()
+    return {row["coord"] for row in rows}
+
+
+def flag_counts(game_id: int) -> dict:
+    """{coord: number of people who flagged it}, unresolved only."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT coord, COUNT(*) n FROM flags "
+            "WHERE game_id = ? AND correct IS NULL GROUP BY coord",
+            (game_id,)).fetchall()
+    return {row["coord"]: row["n"] for row in rows}
+
+
+def resolve_flags(game_id: int, coords: dict) -> int:
+    """Score claims now that the truth is known.
+
+    `coords` maps a coordinate to whether it actually held a mine. Only
+    unresolved claims are touched, so scoring cannot be applied twice.
+    """
+    if not coords:
+        return 0
+    with _connect() as conn:
+        total = 0
+        for coord, was_mine in coords.items():
+            cur = conn.execute(
+                "UPDATE flags SET correct = ? "
+                "WHERE game_id = ? AND coord = ? AND correct IS NULL",
+                (int(bool(was_mine)), game_id, coord))
+            total += cur.rowcount
+        return total
+
+
+def flag_scores(game_id: int | None = None) -> list:
+    """Per-person flag accuracy, best first, resolved claims only."""
+    where, params = ("WHERE game_id = ?", [game_id]) if game_id else ("", [])
+    clause = ("AND correct IS NOT NULL" if where else "WHERE correct IS NOT NULL")
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""SELECT handle,
+                       SUM(correct) hits,
+                       COUNT(*) total
+                FROM flags {where} {clause}
+                GROUP BY handle ORDER BY hits DESC, total ASC""",
+            params).fetchall()
+    return [{"handle": r["handle"], "hits": r["hits"] or 0, "total": r["total"]}
+            for r in rows]
+
+
+# ---------------------------------------------------------------------------
 # Post tracking (so a reset deletes precisely the bot's own posts)
 # ---------------------------------------------------------------------------
 
@@ -348,3 +443,4 @@ def reset_all(keep_record: bool = False) -> None:
         if not keep_record:
             conn.execute("DELETE FROM game_history")
             conn.execute("DELETE FROM moves")
+            conn.execute("DELETE FROM flags")

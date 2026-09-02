@@ -32,6 +32,11 @@ RESTART_DELAY_SECONDS = int(os.environ.get("RESTART_DELAY_SECONDS", "3600"))
 # clear rate against vote splitting; see tests/simulate.py.
 QUORUM = int(os.environ.get("QUORUM", "2"))
 
+# How many people must flag a cell before the flag appears on the board.
+# One, deliberately: at this audience size requiring two would mean flags
+# essentially never show, and a flag that never appears teaches nobody.
+FLAG_QUORUM = int(os.environ.get("FLAG_QUORUM", "1"))
+
 DB_PATH = os.environ.get("DB_PATH", "minesweeper.db")
 LOG_PATH = os.environ.get("LOG_PATH", "")
 

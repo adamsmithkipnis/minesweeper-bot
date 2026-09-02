@@ -72,9 +72,26 @@ parser reads them properly rather than grabbing the first coordinate it sees:
 | `D4` | D4 |
 | `C3 is a mine, so D4 must be safe — D4` | D4 |
 | `don't open C3, try D4` | D4 |
-| `flag C3` / `C3 is a mine` | no vote |
+| `flag C3` / `C3 is a mine` | flags C3, no vote |
 | `I vote A1, actually I pick B2` | B2 |
 | `a good move` / `I agree` | no vote |
+
+### Flagging
+
+Flagging costs no turn, so one reply can do both jobs — `C3 is a mine, so D4
+is safe — D4` flags C3 and votes to open D4. `flag C3`, `C3 = mine`, `mine at
+C3`, `🚩 C3`, `C3 and D4 are mines` and `unflag C3` all work, because the
+syntax has to be whatever people already write rather than a command they are
+expected to memorise.
+
+Flags appear on the board as the classic pennant and tick the mine counter
+down. **A flag is a claim, never a verdict**: a wrong flag is drawn exactly
+like a right one, and a test pins that. Nor can a flag block a cell from being
+opened — one bad flag would otherwise let a single person lock a safe cell and
+stall the board forever.
+
+Claims are scored when the cell is opened, or against the real layout when the
+run ends, and the game-over post names who read the mines best on that board.
 
 ## Layout
 
@@ -83,7 +100,7 @@ parser reads them properly rather than grabbing the first coordinate it sees:
 | `main.py` | Orchestrator and APScheduler loop |
 | `game.py` | Rules, board generation, flood fill, win/loss (pure logic) |
 | `solver.py` | Deduction: single-cell rule, subset rule, exact enumeration |
-| `votes.py` | Coordinate parsing and vote tallying (no network dependency) |
+| `votes.py` | Coordinate parsing, vote tallying, flag claims (no network dependency) |
 | `renderer.py` | Board PNG and full-position alt text |
 | `bluesky.py` | AT Protocol wrapper, richtext facets, post deletion, dry run |
 | `db.py` | SQLite: board state, history, moves, post log |
