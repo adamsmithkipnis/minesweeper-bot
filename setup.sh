@@ -172,24 +172,44 @@ wait_until_gone() {
 reload_service() {
   local service="$1" plist="$2"
   local target="gui/$UID_NUM/$service"
-  local loaded=0
-  launchctl print "$target" >/dev/null 2>&1 && loaded=1
+  local i
 
-  if [ "$loaded" -eq 1 ]; then
+  if launchctl print "$target" >/dev/null 2>&1; then
     launchctl bootout "$target" >/dev/null 2>&1 || true
-    wait_until_gone "$target" || say "  (still unloading; trying anyway)"
+    wait_until_gone "$target" || say "  (still unloading; continuing)"
   fi
 
-  local i
-  for i in 1 2 3; do
+  # bootstrap can return "5: Input/output error" for a while after an
+  # unload, and again right after the plist file has been replaced. It is
+  # transient, so retry with a growing pause rather than giving up after a
+  # few seconds — the old three-tries-then-kickstart could not recover,
+  # because kickstart needs a service that is already loaded.
+  for i in 1 1 2 2 3 3 5 5; do
     if launchctl bootstrap "gui/$UID_NUM" "$plist" >/dev/null 2>&1; then
       return 0
     fi
-    sleep 1
+    # If it is loaded again by now, a kick is all that is needed.
+    if launchctl print "$target" >/dev/null 2>&1; then
+      launchctl kickstart -k "$target" >/dev/null 2>&1 && return 0
+    fi
+    sleep "$i"
   done
-  # If it came back by itself in the meantime, a kick is enough.
-  launchctl kickstart -k "$target" >/dev/null 2>&1 && return 0
+
+  # Last resort: the legacy loader still works in some cases where
+  # bootstrap keeps returning EIO.
+  if launchctl load -w "$plist" >/dev/null 2>&1 \
+     && launchctl print "$target" >/dev/null 2>&1; then
+    say "  ($service loaded via the legacy loader)"
+    return 0
+  fi
   return 1
+}
+
+# A service that is loaded but not running is still a stopped bot, so
+# check the end state rather than trusting the loader's exit status.
+verify_loaded() {
+  local service="$1"
+  launchctl print "gui/$UID_NUM/$service" >/dev/null 2>&1
 }
 
 step "launchd jobs"
@@ -212,14 +232,19 @@ for service in "${SERVICES[@]}"; do
      && launchctl print "gui/$UID_NUM/$service" >/dev/null 2>&1; then
     # Unchanged and already loaded: a kick avoids the unload race entirely.
     rm -f "$tmp"
-    launchctl kickstart -k "gui/$UID_NUM/$service" >/dev/null 2>&1 \
-      && say "$service restarted" \
-      || { say "$service could not be restarted"; failed="$failed $service"; }
+    if launchctl kickstart -k "gui/$UID_NUM/$service" >/dev/null 2>&1 \
+       && verify_loaded "$service"; then
+      say "$service restarted"
+    else
+      say "$service could not be restarted"
+      failed="$failed $service"
+    fi
     continue
   fi
 
   mv "$tmp" "$target"
-  if reload_service "$service" "$target"; then
+  chmod 644 "$target"
+  if reload_service "$service" "$target" && verify_loaded "$service"; then
     say "$service installed"
   else
     say "$service FAILED to load"
