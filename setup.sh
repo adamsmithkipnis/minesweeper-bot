@@ -133,8 +133,16 @@ if [ ! -f "$REPO_DIR/.env" ]; then
 MSG
   exit 1
 fi
-if grep -q '^BLUESKY_APP_PASSWORD=xxxx' "$REPO_DIR/.env"; then
-  die "$REPO_DIR/.env still has the placeholder app password. Fill it in and re-run."
+# Check the shape rather than the literal placeholder. Matching only on
+# "xxxx" meant that editing the placeholder in .env.example — as happened
+# once — would quietly disable this guard and let the bot start with no
+# credentials at all.
+APP_PW="$(grep -E '^BLUESKY_APP_PASSWORD=' "$REPO_DIR/.env" | head -1 | cut -d= -f2- | tr -d '[:space:]')"
+if ! printf '%s' "$APP_PW" | grep -qE '^[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}$' \
+   || printf '%s' "$APP_PW" | grep -qi '^xxxx'; then
+  die "BLUESKY_APP_PASSWORD in $REPO_DIR/.env is not a real app password.
+  Expected the xxxx-xxxx-xxxx-xxxx shape from Settings > Privacy and Security
+  > App Passwords. Fill it in and re-run."
 fi
 chmod 600 "$REPO_DIR/.env"
 say "handle: $(grep -E '^BLUESKY_HANDLE=' "$REPO_DIR/.env" | cut -d= -f2-)"
