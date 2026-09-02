@@ -164,3 +164,22 @@ class DoesNotLeak(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Unflagging(unittest.TestCase):
+    """Taking a mark off should not read as a request to open the cell."""
+
+    def test_phrasings_that_remove_a_flag(self):
+        for text in ("unflag D6", "un-flag D6", "unmark D6",
+                     "remove the flag on D6", "remove flag D6",
+                     "clear the flag at D6"):
+            with self.subTest(text=text):
+                claimed, withdrawn = votes.parse_flags(text, 9, 9)
+                self.assertIn("D6", withdrawn, f"{text!r} did not unflag")
+                self.assertIsNone(votes.parse_vote(text, 9, 9),
+                                  f"{text!r} was read as a vote to open")
+
+    def test_unflag_and_vote_in_one_reply(self):
+        claimed, withdrawn = votes.parse_flags("unflag D6 and vote D6", 9, 9)
+        self.assertIn("D6", withdrawn)
+        self.assertEqual(votes.parse_vote("unflag D6 and vote D6", 9, 9), "D6")

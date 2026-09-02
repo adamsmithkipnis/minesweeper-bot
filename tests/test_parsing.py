@@ -144,12 +144,37 @@ class Tallying(unittest.TestCase):
         self.assertEqual(result.total_voters, 3)
         self.assertEqual(result.caller_handle, "a.bsky.social")
 
-    def test_one_vote_per_account_earliest_counts(self):
+    def test_one_vote_per_account_latest_counts(self):
+        # People argue themselves around. Counting the earliest reply
+        # silently discarded every correction: someone who said "D4" and
+        # then "actually F6" watched the bot ignore the second one.
         result = votes.tally([
             reply("a", "D4", "1"), reply("a", "E5", "2"), reply("a", "F6", "3"),
         ], set(), ROWS, COLS)
-        self.assertEqual(result.coord, "D4")
+        self.assertEqual(result.coord, "F6")
         self.assertEqual(result.total_voters, 1)
+
+    def test_a_reply_without_a_coordinate_keeps_your_vote(self):
+        result = votes.tally([
+            reply("a", "D4", "1"), reply("a", "nice board!", "2"),
+        ], set(), ROWS, COLS)
+        self.assertEqual(result.coord, "D4")
+
+    def test_flagging_does_not_use_up_your_vote(self):
+        # The reported bug: flag a cell, then vote somewhere else.
+        result = votes.tally([
+            reply("a", "Flag E4", "1"), reply("a", "D4", "2"),
+        ], set(), ROWS, COLS)
+        self.assertEqual(result.coord, "D4")
+
+    def test_changing_your_mind_hands_credit_to_a_current_voter(self):
+        # "a" called B2 first but moved on, so B2 belongs to "b".
+        tally_votes, first = votes.collect([
+            reply("a", "B2", "1"), reply("a", "C3", "2"), reply("b", "B2", "3"),
+        ], set(), ROWS, COLS)
+        self.assertEqual(tally_votes["a"], "C3")
+        self.assertEqual(first["B2"].handle, "b.bsky.social")
+        self.assertEqual(first["C3"].handle, "a.bsky.social")
 
     def test_ties_go_to_whoever_called_it_first(self):
         result = votes.tally([

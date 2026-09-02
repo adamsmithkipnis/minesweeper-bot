@@ -208,17 +208,28 @@ def build_flag_reply(coords: list, total_flagged: int) -> str:
         tags=[config.REPLY_HASHTAG])
 
 
-def build_credit_reply(state: game.GameState, coord: str, vote) -> str:
+def build_credit_reply(state: game.GameState, coord: str, vote,
+                       points: int = 0, this_game: int = 0,
+                       all_time: int = 0) -> str:
+    """Thank the caller, and tell them what it earned them.
+
+    Scores are the point of coming back: a move is worth the cells it
+    opened, so the reply is also the only place most people ever see their
+    running total.
+    """
     if state.status == game.EXPLODED:
         outcome = "and it was a mine. That's the run — thanks for playing."
     elif state.status == game.CLEARED:
         outcome = "and that cleared the board. Nice."
     else:
         outcome = f"and it {_outcome_phrase(state, coord)}."
+    scored = f"+{_plural(points, 'point')}\n" if points else ""
     return _with_tags(
         f"🎯 Your call. We opened {coord} on turn {state.turn_number} "
         f"{outcome}\n\n"
-        f"({vote.votes} of {vote.total_voters} votes)",
+        f"{scored}"
+        f"This game: {this_game}\n"
+        f"All time: {all_time}",
         tags=[config.REPLY_HASHTAG])
 
 
@@ -425,6 +436,11 @@ def _game_tick() -> None:
         logger.error("Turn %d picked an open cell %s; skipping",
                      state.turn_number, coord)
         return
+    # A move scores the cells it opened — a blank that cascades is worth
+    # more than a single numbered cell, and a mine scores nothing.
+    points = len(state.revealed) - len(revealed_before)
+    caller_did = vote.caller.did if (vote and source == "crowd" and vote.caller) else ""
+
     state.last_coord = coord
     state.last_result = result
     state.last_source = source
@@ -470,12 +486,29 @@ def _game_tick() -> None:
         return
     state.last_post_uri = uri
 
+    # Recorded before the credit reply below so this turn's points are
+    # already in the totals that reply quotes. It stays after the board
+    # post, so a failed post still replays the turn cleanly.
+    try:
+        db.record_move(state, coord, result, source,
+                       caller=state.last_caller, votes=state.last_votes,
+                       voters=state.last_voters,
+                       was_provably_safe=was_provably_safe,
+                       did=caller_did, points=points)
+        move_recorded = True
+    except Exception:
+        logger.exception("Failed to record move")
+        move_recorded = False
+
     # 5. Credit the follower whose call was played. Non-essential: a failure
     #    must not roll back a turn that has already posted.
     if source == "crowd" and vote and vote.caller and vote.caller.uri:
         try:
             reply_uri = bluesky.post_reply(
-                build_credit_reply(state, coord, vote),
+                build_credit_reply(
+                    state, coord, vote, points,
+                    db.player_points(caller_did, state.game_id),
+                    db.player_points(caller_did)),
                 parent_uri=vote.caller.uri, parent_cid=vote.caller.cid,
                 root_uri=vote.caller.root_uri, root_cid=vote.caller.root_cid)
             _remember(reply_uri, "credit", state.game_id, state.turn_number)
@@ -491,13 +524,15 @@ def _game_tick() -> None:
     if first_flag_of_the_board and claimed:
         _confirm_first_flag(state, claimed)
 
-    try:
-        db.record_move(state, coord, result, source,
-                       caller=state.last_caller, votes=state.last_votes,
-                       voters=state.last_voters,
-                       was_provably_safe=was_provably_safe)
-    except Exception:
-        logger.exception("Failed to record move")
+    if not move_recorded:
+        try:
+            db.record_move(state, coord, result, source,
+                           caller=state.last_caller, votes=state.last_votes,
+                           voters=state.last_voters,
+                           was_provably_safe=was_provably_safe,
+                           did=caller_did, points=points)
+        except Exception:
+            logger.exception("Failed to record move on retry")
     db.save_state(state)
 
     if finished:

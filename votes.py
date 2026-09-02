@@ -59,7 +59,7 @@ _DANGER_AFTER = re.compile(rf"^[^A-Za-z0-9]{{0,4}}[{_DANGER}]")
 
 # "unflag C3" is a request to take a mark off, never a request to open the
 # cell. Left unhandled it parsed as a plain vote for C3.
-_UNDO_BEFORE = re.compile(r"\b(?:un-?flag(?:ging|ged)?|unmark)\b[^A-Za-z0-9]{0,4}$",
+_UNDO_BEFORE = re.compile(r"\b(?:un-?flag(?:ging|ged)?|unmark|remove(?:\s+the)?\s+flag(?:\s+(?:on|from|at))?|clear(?:\s+the)?\s+flag(?:\s+(?:on|from|at))?)\b[^A-Za-z0-9]{0,4}$",
                           re.IGNORECASE)
 
 _NEGATION_BEFORE = re.compile(
@@ -244,20 +244,35 @@ class VoteResult:
 def collect(replies: list, unavailable: set, rows: int, cols: int) -> tuple:
     """Reduce replies to (votes by did, first caller by coordinate).
 
-    Oldest first, so an account's earliest reply is its vote and the follower
-    credited for a coordinate is whoever called it first. Coordinates that are
-    already open are dropped rather than counted — a vote for a revealed cell
-    is a misreading of the board, not a choice.
+    An account gets one vote, and it is their **latest** one: people argue
+    themselves around, and someone who says "E1" and then "actually D6" means
+    D6. Counting the earliest reply instead silently discarded every
+    correction, which is exactly what it looked like from the outside — you
+    posted a new coordinate and the bot ignored it.
+
+    A reply with no coordinate never costs anyone their vote, so flagging a
+    cell and voting for another in separate replies both count. Coordinates
+    that are already open are dropped rather than counted — a vote for a
+    revealed cell is a misreading of the board, not a choice.
     """
-    votes, first = {}, {}
-    for reply in sorted(replies, key=lambda r: r.created_at or ""):
-        if reply.did in votes:
-            continue
+    ordered = sorted(replies, key=lambda r: r.created_at or "")
+    parsed = []
+    for reply in ordered:
         coord = parse_vote(reply.text, rows, cols)
         if coord is None or coord in unavailable:
             continue
-        votes[reply.did] = coord
-        first.setdefault(coord, reply)
+        parsed.append((reply, coord))
+
+    # Later replies replace earlier ones from the same account.
+    votes = {reply.did: coord for reply, coord in parsed}
+
+    # Credit goes to whoever called the winning cell first — but only among
+    # the people still voting for it, so someone who moved on doesn't get
+    # credited for a coordinate they abandoned.
+    first = {}
+    for reply, coord in parsed:
+        if votes.get(reply.did) == coord:
+            first.setdefault(coord, reply)
     return votes, first
 
 

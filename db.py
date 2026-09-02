@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS moves (
     result TEXT,              -- 'safe' | 'mine'
     source TEXT,              -- 'crowd' | 'bot' | 'opening'
     caller TEXT,
+    did TEXT,                 -- stable id: handles change, this does not
+    points INTEGER DEFAULT 0, -- cells this move opened, 0 for a mine
     votes INTEGER,
     voters INTEGER,
     was_provably_safe INTEGER,
@@ -98,7 +100,11 @@ CREATE INDEX IF NOT EXISTS idx_moves_game ON moves (game_id);
 # Columns added after first release. Existing databases get them by ALTER so
 # a board in progress survives an upgrade.
 _ADDED_COLUMNS = {
-    "moves": [("was_provably_safe", "INTEGER")],
+    "moves": [
+        ("did", "TEXT"),
+        ("points", "INTEGER DEFAULT 0"),
+        ("was_provably_safe", "INTEGER"),
+    ],
 }
 
 
@@ -256,16 +262,56 @@ def record_finished(state: GameState) -> None:
 
 def record_move(state: GameState, coord: str, result: str, source: str,
                 caller: str = "", votes: int = 0, voters: int = 0,
-                was_provably_safe: bool | None = None) -> None:
+                was_provably_safe: bool | None = None,
+                did: str = "", points: int = 0) -> None:
     with _connect() as conn:
         conn.execute(
             """INSERT INTO moves (game_id, turn_number, coord, result, source,
-                                  caller, votes, voters, was_provably_safe)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                  caller, did, points, votes, voters,
+                                  was_provably_safe)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (state.game_id, state.turn_number, coord, result, source, caller,
-             votes, voters,
+             did, points, votes, voters,
              None if was_provably_safe is None else int(was_provably_safe)),
         )
+
+
+def player_points(did: str, game_id: int | None = None) -> int:
+    """Points this account has scored — in one game, or across all of them.
+
+    A move scores the number of cells it opened, so a lucky blank that
+    cascades is worth more than a single numbered cell. Mines score nothing.
+    """
+    if not did:
+        return 0
+    clause, params = "WHERE did = ?", [did]
+    if game_id is not None:
+        clause += " AND game_id = ?"
+        params.append(game_id)
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT COALESCE(SUM(points), 0) AS n FROM moves {clause}",
+            params).fetchone()
+    return int(row["n"] or 0)
+
+
+def leaderboard(game_id: int | None = None, limit: int = 5) -> list:
+    """Highest scorers, best first: [{did, handle, points, moves}]."""
+    clause, params = "WHERE did IS NOT NULL AND did != ''", []
+    if game_id is not None:
+        clause += " AND game_id = ?"
+        params.append(game_id)
+    params.append(limit)
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""SELECT did,
+                       (SELECT caller FROM moves m2 WHERE m2.did = m1.did
+                         ORDER BY created_at DESC LIMIT 1) AS handle,
+                       SUM(points) AS points, COUNT(*) AS moves
+                FROM moves m1 {clause}
+                GROUP BY did ORDER BY points DESC, moves ASC LIMIT ?""",
+            params).fetchall()
+    return [dict(r) for r in rows]
 
 
 def get_moves(game_id: int | None = None, limit: int = 100) -> list:
