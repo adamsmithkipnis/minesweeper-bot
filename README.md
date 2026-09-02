@@ -39,10 +39,12 @@ that set the defaults:
   of more coin flips.
 - **9x9 with 13 mines clears 85% of boards at a median of 24 turns** — about a
   day at one turn an hour, with a p10/p90 of 12 and 33.
-- **The quorum is worth 18 points of clear rate.** Free coordinates split the
-  vote: four voters can name four different *correct* cells while two agree on
-  a mine, and the mine wins with 2 votes. Requiring two people to agree before
-  the bot plays the crowd's pick takes boards cleared from 67% to 85%.
+- **The quorum is worth 18 points of clear rate — above three voters.** Free
+  coordinates split the vote: four voters can name four different *correct*
+  cells while two agree on a mine, and the mine wins with 2 votes. Requiring
+  agreement takes boards cleared from 67% to 85% at five voters. Below three
+  voters it is switched off, because there is nothing to split and a lone
+  player who is overridden every turn is not playing anything.
 
 ```bash
 python3 tests/simulate.py --games 300              # the default board
@@ -54,9 +56,15 @@ python3 tests/simulate.py --quorum 0 --voters 8    # try it without the quorum
 1. Read the replies to the last post.
 2. Tally them. One vote per account, earliest reply wins, ties go to whoever
    called the cell first. Votes for cells that are already open are dropped.
-3. If the winning cell has at least `QUORUM` votes, open it. Otherwise the
-   crowd has not actually agreed on anything — one stray vote would carry the
-   turn — so the bot opens its own safest cell and the post says so.
+3. Open the winning cell — unless three or more people voted and no two of
+   them agreed, in which case nothing has actually been decided and the bot
+   breaks the tie with its own safest cell, saying so in the post.
+
+   The quorum only applies once there are more voters than the quorum itself.
+   With one or two people voting there is nothing to split, so whoever turned
+   up decides. Applied strictly it looks fine on paper — 87% of boards
+   finish with a single voter — but the bot is playing 100% of the turns and
+   the one human is a spectator.
 4. Post the new board, and reply to the follower whose call was played.
 
 If the post fails, nothing is saved: the next turn replays against the same

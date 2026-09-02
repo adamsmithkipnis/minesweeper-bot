@@ -26,10 +26,11 @@ MINES = int(os.environ.get("MINES", "13"))
 TURN_MINUTES = int(os.environ.get("TURN_MINUTES", "60"))
 RESTART_DELAY_SECONDS = int(os.environ.get("RESTART_DELAY_SECONDS", "3600"))
 
-# How many people must agree before the crowd's pick is played. Below this the
-# crowd has not actually agreed on anything — one stray vote would carry the
-# turn — so the bot plays its own safest cell and says so. Worth 18 points of
-# clear rate against vote splitting; see tests/simulate.py.
+# How many people must agree before the crowd's pick is played — but only
+# once there are more voters than this. With one or two people voting there
+# is nothing to split, so whoever turned up decides; applied strictly, a lone
+# player would watch the bot take 100% of the turns. Above that it is worth
+# real clear rate against vote splitting; see tests/simulate.py.
 QUORUM = int(os.environ.get("QUORUM", "2"))
 
 # How many people must flag a cell before the flag appears on the board.

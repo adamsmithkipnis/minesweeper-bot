@@ -83,8 +83,8 @@ def _credit_line(vote, source: str) -> str:
                 f"({vote.votes} of {vote.total_voters} votes)")
     if vote is None:
         return "🤖 No votes came in, so I played it myself."
-    return (f"🤖 No consensus — best cell had {_plural(vote.votes, 'vote')}, "
-            f"so I played it myself.")
+    return (f"🤖 {vote.total_voters} voters, no two agreeing — "
+            f"so I broke the tie myself.")
 
 
 def _ask_line(state: game.GameState, flags=(), teach_flagging: bool = False) -> str:
@@ -252,6 +252,12 @@ def _post_board(state: game.GameState, text: str, kind: str,
     return uri
 
 
+def _crowd_decides(vote) -> bool:
+    """Whether the crowd's pick is played rather than the bot's own move."""
+    return (vote.votes >= config.QUORUM
+            or vote.total_voters <= config.QUORUM)
+
+
 def _record_flags(state: game.GameState, claimed: dict, withdrawn: dict) -> None:
     """Persist this turn's mine claims. Never allowed to break a turn."""
     try:
@@ -370,10 +376,12 @@ def _game_tick() -> None:
                                              state.rows, state.cols)
     _record_flags(state, claimed, withdrawn)
 
-    # 2. Decide. Below the quorum the crowd has not actually agreed on
-    #    anything — a single stray vote would carry the turn — so the bot
-    #    plays its own safest cell and the post says so.
-    if vote is not None and vote.votes >= config.QUORUM:
+    # 2. Decide. The quorum exists to stop one stray vote carrying a turn when
+    #    a real crowd has scattered — but it must never silence a small one.
+    #    With no more voters than the quorum itself there is nothing to split,
+    #    so whoever turned up decides. Applied strictly, a lone player would
+    #    watch the bot play 100% of the turns, which is not a crowd game.
+    if vote is not None and _crowd_decides(vote):
         coord, source = vote.coord, "crowd"
         logger.info("Turn %d by crowd: %s (%d of %d votes, called by %s)",
                     state.turn_number + 1, coord, vote.votes,
