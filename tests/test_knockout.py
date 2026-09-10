@@ -195,3 +195,44 @@ class Copy(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EliminationExpiry(unittest.TestCase):
+    """Being knocked out costs a few turns, not the rest of the day.
+
+    With two active players and a permanent elimination, a tier-3 board
+    benches someone for a median of 40 turns with a tail near 500, and the
+    bot plays 102 turns alone because the board cannot finish without them.
+    At four turns those become 3, 6 and 0.4.
+    """
+
+    def setUp(self):
+        self._old = config.DB_PATH
+        config.DB_PATH = os.path.join(tempfile.mkdtemp(), "expiry.db")
+        db.init_db()
+        db.eliminate(1, "did:a", "a", "C3", turn_number=5)
+
+    def tearDown(self):
+        config.DB_PATH = self._old
+
+    def test_benched_for_exactly_the_configured_turns(self):
+        for turn in (6, 7, 8, 9):
+            self.assertEqual(db.benched(1, turn, 4), {"did:a"},
+                             f"should still be out on turn {turn}")
+        self.assertEqual(db.benched(1, 10, 4), set(),
+                         "should be back on turn 10")
+
+    def test_zero_means_the_whole_board(self):
+        for turn in (6, 50, 500):
+            self.assertEqual(db.benched(1, turn, 0), {"did:a"})
+
+    def test_the_tally_still_counts_everyone_ever_knocked_out(self):
+        """Survivor counts must not forget somebody who came back."""
+        self.assertEqual(db.eliminated(1), {"did:a"})
+        self.assertEqual(db.benched(1, 20, 4), set())
+        self.assertEqual(db.eliminated(1), {"did:a"})
+
+    def test_a_second_elimination_restarts_the_clock(self):
+        db.eliminate(1, "did:b", "b", "D4", turn_number=12)
+        self.assertEqual(db.benched(1, 13, 4), {"did:b"})
+        self.assertNotIn("did:a", db.benched(1, 13, 4))

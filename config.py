@@ -76,6 +76,14 @@ TIERS = _parse_tiers(os.environ.get(
 KNOCKOUT = os.environ.get("KNOCKOUT", "0").lower() not in ("0", "false", "no")
 MINE_BUDGET_BASE = int(os.environ.get("MINE_BUDGET_BASE", "1"))
 
+# How many turns a knocked-out player sits out before they can act again.
+# 0 benches them for the whole board, which is only tolerable with a large
+# crowd: measured, at two active players a tier-2 elimination costs a median
+# of 25 turns of spectating and a tail of several hundred, because the board
+# cannot finish without them and the bot grinds it out alone. A few turns
+# keeps the sting and caps the bench.
+ELIMINATION_TURNS = int(os.environ.get("ELIMINATION_TURNS", "4"))
+
 # Pacing.
 TURN_MINUTES = int(os.environ.get("TURN_MINUTES", "30"))
 RESTART_DELAY_SECONDS = int(os.environ.get("RESTART_DELAY_SECONDS", "3600"))
