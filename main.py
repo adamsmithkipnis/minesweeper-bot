@@ -1029,9 +1029,13 @@ def main() -> None:
     args = parser.parse_args()
 
     setup_logging()
-    logger.info("Minesweeper bot starting (%dx%d, %d mines, %d min turns, "
-                "quorum %d, mode %s)", config.ROWS, config.COLS, config.MINES,
-                config.TURN_MINUTES, config.QUORUM, config.POST_MODE)
+    mode = (f"knockout, elimination {config.ELIMINATION_TURNS} turns"
+            if config.KNOCKOUT else f"voting, quorum {config.QUORUM}")
+    tiers = ("tiers " + " ".join(f"{r}x{c}/{m}" for r, c, m in config.TIERS)
+             if config.ADAPTIVE_BOARD else
+             f"fixed {config.ROWS}x{config.COLS}/{config.MINES}")
+    logger.info("Minesweeper bot starting (%s, %d min turns, %s, posting %s)",
+                tiers, config.TURN_MINUTES, mode, config.POST_MODE)
 
     db.init_db()
     bluesky.login_with_retry()
