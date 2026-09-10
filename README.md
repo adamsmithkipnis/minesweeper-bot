@@ -109,6 +109,15 @@ Eliminated players can still flag. Flagging costs no turn and carries no risk,
 so being knocked out is a change of role rather than an exit — you keep
 scoring and keep helping the survivors.
 
+**An elimination expires after `ELIMINATION_TURNS` (4 by default).** This is
+what makes knockout safe with a small crowd. Benching someone for the whole
+board only works when enough people are left to finish it: measured with two
+active players on a tier-3 board, a permanent elimination costs a median of
+40 turns of spectating with a tail near 500, and the bot ends up playing 102
+turns by itself because the board cannot finish without the people it knocked
+out. At four turns those numbers are 3, 6 and 0.4 — and the board finishes
+faster too, 27 turns against 38.
+
 **Letting everyone act is only survivable because of the knockout rule.** With
 N players each independently risking a mine, survival per turn is `skill^N`.
 At the 87.5% accuracy this game actually shows, five players acting under

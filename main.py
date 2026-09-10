@@ -457,7 +457,11 @@ def apply_knockout_moves(state: game.GameState, replies: list,
     beaten to a square is not a wasted turn. Knocked-out players are excluded
     here, but they can still flag, which costs no turn and carries no risk.
     """
-    excluded = db.eliminated(state.game_id)
+    # Benched players, not everyone ever knocked out: an elimination expires
+    # after ELIMINATION_TURNS so a two-player board is not decided by whoever
+    # steps on the first mine.
+    excluded = db.benched(state.game_id, state.turn_number + 1,
+                          config.ELIMINATION_TURNS)
     pending = votes.moves(replies, already_open, state.rows, state.cols,
                           excluded)
     state.turn_number += 1

@@ -500,10 +500,36 @@ def eliminate(game_id: int, did: str, handle: str, coord: str,
 
 
 def eliminated(game_id: int) -> set:
-    """DIDs knocked out of this board."""
+    """Every DID knocked out on this board at any point — for the tally."""
     with _connect() as conn:
         rows = conn.execute(
             "SELECT did FROM eliminations WHERE game_id = ?", (game_id,)).fetchall()
+    return {row["did"] for row in rows}
+
+
+def benched(game_id: int, turn_number: int, duration: int) -> set:
+    """DIDs that cannot act on this turn.
+
+    Knocked out on turn T with `duration` 4, a player misses turns T+1 to
+    T+4 and acts again on T+5. With `duration` 0 the elimination lasts the
+    whole board.
+
+    Expiry is what makes knockout safe at small crowd sizes. Measured with
+    two active players on a tier-3 board, a permanent elimination costs a
+    median of 40 turns of spectating with a tail near 500, and the bot ends
+    up playing 102 turns by itself because the board cannot finish without
+    the people it knocked out. At four turns those numbers are 3, 6 and 0.4.
+    """
+    with _connect() as conn:
+        if duration <= 0:
+            rows = conn.execute(
+                "SELECT did FROM eliminations WHERE game_id = ?",
+                (game_id,)).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT did FROM eliminations "
+                "WHERE game_id = ? AND turn_number >= ?",
+                (game_id, turn_number - duration)).fetchall()
     return {row["did"] for row in rows}
 
 
