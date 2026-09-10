@@ -97,6 +97,38 @@ One player may flag several cells in one reply. Flags are only claims: they do
 not open cells, trigger mines, or prevent the crowd from opening a flagged
 cell later.
 
+### Knockout play
+
+Off by default (`KNOCKOUT=1` to enable). Instead of the crowd voting on one
+cell, **everyone who replies opens a cell of their own** — nobody's move is
+discarded. A mine takes *that player* out of the board rather than ending it
+for everybody, and the spent mine stays visible as information for whoever is
+left. The board itself fails once more than `tier + 1` mines have gone off.
+
+Eliminated players can still flag. Flagging costs no turn and carries no risk,
+so being knocked out is a change of role rather than an exit — you keep
+scoring and keep helping the survivors.
+
+**Letting everyone act is only survivable because of the knockout rule.** With
+N players each independently risking a mine, survival per turn is `skill^N`.
+At the 87.5% accuracy this game actually shows, five players acting under
+sudden death clear 52% of boards in five turns — and it gets *worse* as the
+audience grows, dropping to 44% at eight players. Making a mine cost the
+player instead of the board inverts that: eight players clear 98%.
+
+| board | cleared | median turns | at 60-min turns |
+| --- | --- | --- | --- |
+| 9x9, 13 mines, 1 spare | 81% | 7 | 7h |
+| 10x10, 18 mines, 2 spares | 87% | 10 | 10h |
+| 11x11, 24 mines, 3 spares | 83% | 15 | 15h |
+
+A spare per tier loses roughly a fifth of boards on every rung, which is the
+right weight when being knocked out yourself is the main event; two spares
+leaves boards clearing 93-98% and the collective stake stops meaning much.
+
+Knockout moves a board roughly five times faster than voting does, so it
+pairs with `TURN_MINUTES=60`. Voting pairs with 30.
+
 ### Difficulty tiers
 
 A win where the crowd called at least 75% of the turns promotes the next board

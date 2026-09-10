@@ -117,6 +117,8 @@ def main() -> int:
     parser.add_argument("--turns", type=int, default=60)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--out", default="/tmp/minesweeper-dryrun")
+    parser.add_argument("--knockout", action="store_true",
+                        help="everyone acts; a mine knocks out the player")
     parser.add_argument("--keep", action="store_true",
                         help="keep a previous run's output instead of wiping it")
     args = parser.parse_args()
@@ -125,6 +127,8 @@ def main() -> int:
         shutil.rmtree(args.out)
     os.makedirs(args.out, exist_ok=True)
     db_path = os.path.join(tempfile.mkdtemp(), "dryrun.db")
+    if args.knockout:
+        os.environ["KNOCKOUT"] = "1"
     configure(args.out, db_path)
 
     import main as bot

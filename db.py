@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS game_state (
     last_votes INTEGER,
     last_voters INTEGER,
     exploded_cell TEXT,
+    mine_budget INTEGER DEFAULT 0,
+    detonations INTEGER DEFAULT 0,
+    spent_mines TEXT,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -80,6 +83,21 @@ CREATE TABLE IF NOT EXISTS flags (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_flags_one_per_person
     ON flags (game_id, coord, did);
+
+-- Knocked-out players, per board. A mine takes the player who opened it out
+-- of that board rather than ending it for everyone; they can still flag.
+CREATE TABLE IF NOT EXISTS eliminations (
+    id INTEGER PRIMARY KEY,
+    game_id INTEGER,
+    did TEXT,
+    handle TEXT,
+    coord TEXT,
+    turn_number INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_eliminated_once
+    ON eliminations (game_id, did);
 
 -- Every post the bot creates, so a reset deletes exactly the bot's own posts
 -- instead of indiscriminately emptying the account.
@@ -161,9 +179,10 @@ def save_state(state: GameState) -> None:
                 id, game_id, rows, cols, mine_count, mine_cells, revealed,
                 turn_number, status, last_post_uri, last_coord, last_result,
                 last_source, last_caller, last_votes, last_voters,
-                exploded_cell, updated_at
-            ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                      CURRENT_TIMESTAMP)
+                exploded_cell, mine_budget, detonations, spent_mines,
+                updated_at
+            ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                      ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(id) DO UPDATE SET
                 game_id=excluded.game_id, rows=excluded.rows,
                 cols=excluded.cols, mine_count=excluded.mine_count,
@@ -177,6 +196,9 @@ def save_state(state: GameState) -> None:
                 last_votes=excluded.last_votes,
                 last_voters=excluded.last_voters,
                 exploded_cell=excluded.exploded_cell,
+                mine_budget=excluded.mine_budget,
+                detonations=excluded.detonations,
+                spent_mines=excluded.spent_mines,
                 updated_at=CURRENT_TIMESTAMP
             """,
             (
@@ -187,8 +209,31 @@ def save_state(state: GameState) -> None:
                 state.last_coord, state.last_result, state.last_source,
                 state.last_caller, state.last_votes, state.last_voters,
                 state.exploded_cell,
+                state.mine_budget,
+                state.detonations,
+                json.dumps(sorted(list(cell) for cell in state.spent_mines)),
             ),
         )
+
+
+def _int(row, name: str) -> int:
+    try:
+        return row[name] or 0
+    except (IndexError, KeyError):
+        return 0
+
+
+def _json(row, name: str) -> list:
+    try:
+        raw = row[name]
+    except (IndexError, KeyError):
+        return []
+    if not raw:
+        return []
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return []
 
 
 def load_state() -> GameState | None:
@@ -221,6 +266,9 @@ def load_state() -> GameState | None:
         last_votes=row["last_votes"] or 0,
         last_voters=row["last_voters"] or 0,
         exploded_cell=row["exploded_cell"] or "",
+        mine_budget=_int(row, "mine_budget"),
+        detonations=_int(row, "detonations"),
+        spent_mines={tuple(cell) for cell in _json(row, "spent_mines")},
     )
 
 
@@ -274,6 +322,15 @@ def record_move(state: GameState, coord: str, result: str, source: str,
              did, points, votes, voters,
              None if was_provably_safe is None else int(was_provably_safe)),
         )
+
+
+def player_count(game_id: int) -> int:
+    """Distinct accounts that have taken a move on this board."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(DISTINCT did) n FROM moves "
+            "WHERE game_id = ? AND did != ''", (game_id,)).fetchone()
+    return row["n"] if row else 0
 
 
 def player_points(did: str, game_id: int | None = None) -> int:
@@ -429,6 +486,36 @@ def flag_scores(game_id: int | None = None) -> list:
 
 
 # ---------------------------------------------------------------------------
+# Knockout
+# ---------------------------------------------------------------------------
+
+def eliminate(game_id: int, did: str, handle: str, coord: str,
+              turn_number: int) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """INSERT OR IGNORE INTO eliminations
+               (game_id, did, handle, coord, turn_number)
+               VALUES (?, ?, ?, ?, ?)""",
+            (game_id, did, handle, coord, turn_number))
+
+
+def eliminated(game_id: int) -> set:
+    """DIDs knocked out of this board."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT did FROM eliminations WHERE game_id = ?", (game_id,)).fetchall()
+    return {row["did"] for row in rows}
+
+
+def eliminations(game_id: int) -> list:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM eliminations WHERE game_id = ? ORDER BY id",
+            (game_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
 # Post tracking (so a reset deletes precisely the bot's own posts)
 # ---------------------------------------------------------------------------
 
@@ -490,3 +577,4 @@ def reset_all(keep_record: bool = False) -> None:
             conn.execute("DELETE FROM game_history")
             conn.execute("DELETE FROM moves")
             conn.execute("DELETE FROM flags")
+            conn.execute("DELETE FROM eliminations")

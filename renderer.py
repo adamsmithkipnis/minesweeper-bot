@@ -101,6 +101,11 @@ def display_grid(state: game.GameState, flags=()) -> list:
         for c in range(state.cols):
             if (r, c) in state.revealed:
                 row.append(str(state.revealed[(r, c)]))
+            elif (r, c) in state.spent_mines:
+                # Already detonated: everybody watched it go off, so showing
+                # it leaks nothing and helps the survivors. The guarantee is
+                # unchanged for mines nobody has hit.
+                row.append(EXPLODED)
             elif over and (r, c) in state.mine_cells:
                 row.append(EXPLODED
                            if game.index_to_coord(r, c) == state.exploded_cell
@@ -291,7 +296,7 @@ def render_board(state: game.GameState, highlight: str = "",
     counter_w, counter_h = 108, HEADER_H - inset * 2
     _counter(draw, (hx0 + inset, hy0 + inset,
                     hx0 + inset + counter_w, hy0 + inset + counter_h),
-             state.mine_count - len(flags))
+             state.mine_count - len(flags) - state.detonations)
     _counter(draw, (hx1 - inset - counter_w, hy0 + inset,
                     hx1 - inset, hy0 + inset + counter_h),
              state.turn_number)

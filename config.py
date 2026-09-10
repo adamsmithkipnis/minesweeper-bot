@@ -61,6 +61,21 @@ def _parse_tiers(raw: str) -> list:
 TIERS = _parse_tiers(os.environ.get(
     "TIERS", "9x9:13, 10x10:18, 11x11:24"))
 
+# Knockout play. Every eligible player opens their own cell each turn instead
+# of the crowd voting on one. A mine takes that player out of the board rather
+# than ending it for everybody — but the board itself fails once more than
+# `tier + MINE_BUDGET_BASE` mines have gone off, so collective stakes survive.
+# At base 1 that is roughly a 20% board loss on every tier; base 2 leaves
+# boards clearing 93-98%, where the collective stake stops meaning much.
+#
+# Without the knockout rule, letting everyone act is ruinous: with N players
+# each independently risking a mine, survival per turn is skill^N, and at the
+# 87.5% accuracy this game actually shows, five players clear only 52% of
+# boards in 5 turns. It also gets worse as the audience grows. Making a mine
+# cost the player instead of the board inverts that — eight players clear 98%.
+KNOCKOUT = os.environ.get("KNOCKOUT", "0").lower() not in ("0", "false", "no")
+MINE_BUDGET_BASE = int(os.environ.get("MINE_BUDGET_BASE", "1"))
+
 # Pacing.
 TURN_MINUTES = int(os.environ.get("TURN_MINUTES", "30"))
 RESTART_DELAY_SECONDS = int(os.environ.get("RESTART_DELAY_SECONDS", "3600"))

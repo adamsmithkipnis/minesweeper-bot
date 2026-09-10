@@ -36,6 +36,27 @@ class DisplayGrid(unittest.TestCase):
                 cell, _ = solver.safest_move(position)
                 game.reveal(state, *cell)
 
+    def test_knockout_shows_spent_mines_and_only_spent_ones(self):
+        """A detonated mine is public — everyone watched it go off.
+
+        The guarantee that matters is unchanged: a mine nobody has hit is
+        still drawn as an ordinary unopened tile.
+        """
+        for seed in range(30):
+            state = game.new_game(seed, rng=random.Random(seed + 700),
+                                  mine_budget=99)
+            for cell in sorted(state.mine_cells)[:4]:
+                game.reveal(state, *cell)
+            self.assertEqual(state.status, game.ACTIVE)
+
+            grid = renderer.display_grid(state)
+            for (r, c) in state.mine_cells:
+                expected = (renderer.EXPLODED if (r, c) in state.spent_mines
+                            else renderer.HIDDEN)
+                self.assertEqual(grid[r][c], expected)
+            self.assertNotIn(renderer.MINE,
+                             [t for row in grid for t in row])
+
     def test_alt_text_never_leaks_either(self):
         for seed in range(40):
             state = game.new_game(seed, rng=random.Random(seed + 900))

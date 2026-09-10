@@ -276,6 +276,39 @@ def collect(replies: list, unavailable: set, rows: int, cols: int) -> tuple:
     return votes, first
 
 
+@dataclass
+class Move:
+    """One player's action for a turn."""
+    did: str
+    handle: str
+    coord: str
+    reply: Reply
+
+
+def moves(replies: list, unavailable: set, rows: int, cols: int,
+          exclude: set = frozenset()) -> list:
+    """Every eligible player's cell for this turn, earliest replier first.
+
+    Knockout play acts on all of these rather than only the plurality winner:
+    one action each, so nobody's reply is discarded. The per-account rule is
+    the same as voting — their latest coordinate — so a correction still
+    works. `exclude` holds accounts already knocked out of this board; they
+    can still flag, which costs no turn and carries no risk.
+    """
+    ordered = sorted(replies, key=lambda r: r.created_at or "")
+    votes, _ = collect(replies, unavailable, rows, cols)
+
+    seen, out = set(), []
+    for reply in ordered:
+        did = reply.did
+        if did in seen or did in exclude or did not in votes:
+            continue
+        seen.add(did)
+        out.append(Move(did=did, handle=reply.handle, coord=votes[did],
+                        reply=reply))
+    return out
+
+
 def breakdown(replies: list, unavailable: set, rows: int, cols: int) -> list:
     """Every coordinate currently voted for, most votes first.
 
