@@ -123,6 +123,11 @@ _ADDED_COLUMNS = {
         ("points", "INTEGER DEFAULT 0"),
         ("was_provably_safe", "INTEGER"),
     ],
+    "game_state": [
+        ("mine_budget", "INTEGER DEFAULT 0"),
+        ("detonations", "INTEGER DEFAULT 0"),
+        ("spent_mines", "TEXT"),
+    ],
 }
 
 
