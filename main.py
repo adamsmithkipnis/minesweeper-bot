@@ -144,9 +144,12 @@ def build_opening_text(state: game.GameState, record: dict) -> str:
     if record["played"]:
         scoreline = (f"All time: {record['cleared']} cleared, "
                      f"{record['exploded']} lost.\n")
+    tier = tier_of(state)
+    banner = (f"💣 NEW BOARD — Tier {tier + 1} · "
+              f"{state.rows}x{state.cols}, {state.mine_count} mines"
+              + (f", {tier + 1}x points.\n\n" if tier else ".\n\n"))
     return _with_tags(
-        f"💣 NEW BOARD — {state.rows}x{state.cols}, "
-        f"{state.mine_count} mines.\n\n"
+        banner + 
         f"I opened {state.last_coord} to start us off. "
         f"You pick the rest — one mine ends the run.\n"
         f"{scoreline}\n"
@@ -276,7 +279,7 @@ def build_mvp_line(leaders: list) -> str:
         return ""
     best = leaders[0]
     return (f"🏅 Board MVP: @{best['handle']} — "
-            f"{_plural(best['points'], 'cell')} opened.")
+            f"{_plural(best['points'], 'point')}.")
 
 
 def leaders_with_pending_move(leaders: list, did: str, handle: str,
@@ -294,28 +297,70 @@ def leaders_with_pending_move(leaders: list, did: str, handle: str,
     return sorted(out, key=lambda row: (-row["points"], row["moves"]))
 
 
-def next_board_settings(previous: game.GameState | None,
-                        crowd_moves: int | None = None) -> tuple[int, int, int]:
-    """Dimensions for the next game, using bounded participation hysteresis."""
-    if previous is None or not config.ADAPTIVE_BOARD:
-        return config.ROWS, config.COLS, config.MINES
+def tier_of(state: game.GameState | None) -> int:
+    """Which rung of the ladder a board is on, by its dimensions.
+
+    Derived rather than stored, so an in-progress board survives a change to
+    the tier list and no migration is needed.
+    """
+    if state is None or not config.TIERS:
+        return 0
+    for index, (rows, cols, _) in enumerate(config.TIERS):
+        if (rows, cols) == (state.rows, state.cols):
+            return index
+    # An unrecognised size (hand-set in .env, or a retired tier) maps to the
+    # nearest rung by area rather than silently resetting to the bottom.
+    return min(range(len(config.TIERS)),
+               key=lambda i: abs(config.TIERS[i][0] * config.TIERS[i][1]
+                                 - state.rows * state.cols))
+
+
+def tier_multiplier(state: game.GameState | None) -> int:
+    """What a cell is worth on this board: tier 1 pays 1x, tier 3 pays 3x.
+
+    Higher tiers are longer and likelier to end in a bang, so the reward has
+    to rise with the stakes or the ladder is all cost. Scaling the points
+    rather than handing out more cells per turn matters: the extra reward is
+    spread over MORE turns, because harder boards run longer, instead of
+    being concentrated into fewer.
+    """
+    return tier_of(state) + 1
+
+
+def participation_of(previous: game.GameState, crowd_moves: int | None) -> float:
     if crowd_moves is None:
         crowd_moves = sum(1 for move in db.get_moves(previous.game_id, limit=1000)
                           if move["source"] == "crowd")
-    participation = crowd_moves / previous.turn_number if previous.turn_number else 0
-    delta = 0
+    return crowd_moves / previous.turn_number if previous.turn_number else 0.0
+
+
+def next_tier(previous: game.GameState | None,
+              crowd_moves: int | None = None) -> int:
+    """The rung the next board sits on.
+
+    Promotion needs a win *and* real participation, so the board only gets
+    harder when the crowd is actually driving it. Demotion needs only poor
+    participation: losing a hard board is the game working, but a board the
+    bot had to play itself is one nobody is playing.
+    """
+    if previous is None or not config.ADAPTIVE_BOARD:
+        return 0
+    current = tier_of(previous)
+    share = participation_of(previous, crowd_moves)
     if (previous.status == game.CLEARED
-            and participation >= config.GROW_PARTICIPATION):
-        delta = 1
-    elif participation < config.SHRINK_PARTICIPATION:
-        delta = -1
-    rows = min(config.MAX_BOARD_SIZE,
-               max(config.MIN_BOARD_SIZE, previous.rows + delta))
-    cols = min(config.MAX_BOARD_SIZE,
-               max(config.MIN_BOARD_SIZE, previous.cols + delta))
-    density = config.MINES / (config.ROWS * config.COLS)
-    mines = max(1, round(rows * cols * density))
-    return rows, cols, mines
+            and share >= config.GROW_PARTICIPATION):
+        return min(current + 1, len(config.TIERS) - 1)
+    if share < config.SHRINK_PARTICIPATION:
+        return max(current - 1, 0)
+    return current
+
+
+def next_board_settings(previous: game.GameState | None,
+                        crowd_moves: int | None = None) -> tuple:
+    """(rows, cols, mines) for the next game."""
+    if not config.ADAPTIVE_BOARD or not config.TIERS:
+        return config.ROWS, config.COLS, config.MINES
+    return config.TIERS[next_tier(previous, crowd_moves)]
 
 
 def _restart_phrase() -> str:
@@ -507,7 +552,8 @@ def _game_tick() -> None:
         return
     # A move scores the cells it opened — a blank that cascades is worth
     # more than a single numbered cell, and a mine scores nothing.
-    points = len(state.revealed) - len(revealed_before)
+    points = ((len(state.revealed) - len(revealed_before))
+              * tier_multiplier(state))
     caller_did = vote.caller.did if (vote and source == "crowd" and vote.caller) else ""
 
     state.last_coord = coord

@@ -97,13 +97,34 @@ One player may flag several cells in one reply. Flags are only claims: they do
 not open cells, trigger mines, or prevent the crowd from opening a flagged
 cell later.
 
-### Adaptive boards
+### Difficulty tiers
 
-The next board grows by one row and column after a win where the crowd called
-at least 75% of turns. It shrinks after a board where the crowd called fewer
-than 50% of turns, and otherwise stays the same. Boards are bounded to 7x7
-through 12x12 and preserve roughly the starting mine density. The separate
-thresholds keep participation near the boundary from resizing every game.
+A win where the crowd called at least 75% of the turns promotes the next board
+a tier. A board where they called fewer than 50% demotes it. Losing holds the
+tier — losing a hard board is the game working; a board the bot had to play
+itself is one nobody is playing. The gap between the two thresholds stops
+participation near the boundary from seesawing the board every game.
+
+| tier | board | density | cleared | length at 30-min turns | points |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 9x9, 13 mines | 16% | 84% | 12h | 1x |
+| 2 | 10x10, 18 mines | 18% | 79% | 17h | 2x |
+| 3 | 11x11, 24 mines | 20% | 51% | 18h | 3x |
+
+**Tiers raise size and density together, and that pairing is the point.**
+Growing dimensions alone makes a board longer and *shallower*: at a fixed
+density a larger board is proportionally more open interior and less frontier,
+so more of its turns are trivially decidable. Simulated over 150 boards, a
+12x12 at the starting 16% density runs 43 hours and contains 0.8 turns needing
+real deduction — fewer than the 9x9 it grew from, which has 1.5.
+
+The ladder stops at three rungs deliberately. A fourth (12x12 at 22%) clears
+only 38%: a full day invested and two boards in three end in a bang.
+
+Cells are worth the tier number in points, so the reward rises with the
+stakes. Scaling points rather than handing out extra cells per turn matters:
+harder boards run longer, so the extra reward is spread over *more* turns
+rather than concentrated into fewer.
 
 Flags appear on the board as the classic pennant and tick the mine counter
 down. **A flag is a claim, never a verdict**: a wrong flag is drawn exactly
