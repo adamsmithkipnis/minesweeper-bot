@@ -117,8 +117,8 @@ def _ask_line(state: game.GameState, flags=(), teach_flagging: bool = False) -> 
     counted = (f"{_plural(left, 'cell')} left, {state.mine_count} mines"
                + (f", {len(flags)} flagged.\n" if flags else ".\n"))
     if teach_flagging:
-        ask = (f"Reply a coordinate to open it, A1 to {last} — "
-               f"or 'flag' one you think is a mine.\n")
+        ask = (f"Open: D4 · Flag: 'flag C3' · Change vote: reply again.\n"
+               f"One vote can decide; with 3+ voters, 2 must agree.\n")
     else:
         ask = f"Reply with a coordinate, A1 to {last}.\n"
     return f"{counted}{ask}{config.TURN_MINUTES} min."
@@ -153,9 +153,27 @@ def build_opening_text(state: game.GameState, record: dict) -> str:
         f"{_ask_line(state, teach_flagging=True)}")
 
 
+def build_tutorial_text(state: game.GameState) -> str:
+    """Canonical copy for the pinned how-to post.
+
+    Keeping this generated and tested prevents the public tutorial from
+    drifting away from the parser and quorum rules again.
+    """
+    last = f"{game.row_letters(state.rows)[-1]}{state.cols}"
+    return _with_tags(
+        f"HOW TO PLAY · Reply on the latest board (to {last})\n\n"
+        f"Open a cell: D4\n"
+        f"Flag mines: flag C3 (several are okay)\n"
+        f"Explain + play: C3 is a mine, so D4 is safe — D4\n"
+        f"Change your vote: reply again; your latest choice counts.\n\n"
+        f"One vote can decide. With 3+ voters, 2 must agree; "
+        f"tied cells go to the earliest vote.")
+
+
 def build_gameover_text(state: game.GameState, coord: str, vote, source: str,
                         had_safe: str, record: dict, crowd_moves: int = 0,
-                        flag_line: str = "") -> str:
+                        flag_line: str = "", mvp_line: str = "",
+                        next_board_at: datetime | None = None) -> str:
     opened, total = len(state.revealed), state.total_safe
     if state.status == game.CLEARED:
         head = (f"🎉 BOARD CLEARED in {_plural(state.turn_number, 'turn')}!\n"
@@ -172,10 +190,13 @@ def build_gameover_text(state: game.GameState, coord: str, vote, source: str,
     # that must survive. Recognition lines are added only while the whole post
     # still fits — otherwise the clamp eats the end of the post instead, which
     # is how "New board in an hour" became "New bo…".
+    next_phrase = (next_board_at.astimezone().strftime("%a %-I:%M %p %Z")
+                   if next_board_at else f"in {_restart_phrase()}")
     required = (f"All time: {record['cleared']} cleared, "
                 f"{record['exploded']} lost.\n"
-                f"New board in {_restart_phrase()}.")
+                f"Next board: {next_phrase}. Follow to catch the opening.")
     optional = [
+        mvp_line,
         f"You called {crowd_moves} of {_plural(state.turn_number, 'move')}."
         if crowd_moves else "",
         flag_line,
@@ -247,6 +268,54 @@ def build_flag_line(scores: list) -> str:
     if len(scored) > 1:
         line += f", then @{scored[1]['handle']} ({scored[1]['hits']})"
     return line + "."
+
+
+def build_mvp_line(leaders: list) -> str:
+    """Compact board-end recognition in the main feed."""
+    if not leaders:
+        return ""
+    best = leaders[0]
+    return (f"🏅 Board MVP: @{best['handle']} — "
+            f"{_plural(best['points'], 'cell')} opened.")
+
+
+def leaders_with_pending_move(leaders: list, did: str, handle: str,
+                              points: int) -> list:
+    """Include the just-played move without saving it before posting succeeds."""
+    out = [dict(row) for row in leaders]
+    if did:
+        found = next((row for row in out if row["did"] == did), None)
+        if found:
+            found["points"] += points
+            found["moves"] += 1
+        else:
+            out.append({"did": did, "handle": handle,
+                        "points": points, "moves": 1})
+    return sorted(out, key=lambda row: (-row["points"], row["moves"]))
+
+
+def next_board_settings(previous: game.GameState | None,
+                        crowd_moves: int | None = None) -> tuple[int, int, int]:
+    """Dimensions for the next game, using bounded participation hysteresis."""
+    if previous is None or not config.ADAPTIVE_BOARD:
+        return config.ROWS, config.COLS, config.MINES
+    if crowd_moves is None:
+        crowd_moves = sum(1 for move in db.get_moves(previous.game_id, limit=1000)
+                          if move["source"] == "crowd")
+    participation = crowd_moves / previous.turn_number if previous.turn_number else 0
+    delta = 0
+    if (previous.status == game.CLEARED
+            and participation >= config.GROW_PARTICIPATION):
+        delta = 1
+    elif participation < config.SHRINK_PARTICIPATION:
+        delta = -1
+    rows = min(config.MAX_BOARD_SIZE,
+               max(config.MIN_BOARD_SIZE, previous.rows + delta))
+    cols = min(config.MAX_BOARD_SIZE,
+               max(config.MIN_BOARD_SIZE, previous.cols + delta))
+    density = config.MINES / (config.ROWS * config.COLS)
+    mines = max(1, round(rows * cols * density))
+    return rows, cols, mines
 
 
 def _restart_phrase() -> str:
@@ -462,6 +531,11 @@ def _game_tick() -> None:
     finished = state.status != game.ACTIVE
     record = db.get_record()
     if finished:
+        # The history row is deliberately written only after the post
+        # succeeds, so include this pending result in the public all-time stat.
+        record = dict(record)
+        record[state.status] += 1
+        record["played"] += 1
         # This turn's move is not in the table yet — it is recorded after the
         # post goes out — so count it here or the crowd loses credit for the
         # move that ended the board.
@@ -471,9 +545,15 @@ def _game_tick() -> None:
         # is the moment a flag stops being an opinion.
         _resolve_flags(state, coord, result, revealed_before, final=True)
         flag_line = build_flag_line(db.flag_scores(state.game_id))
+        next_board_at = datetime.now().astimezone() + timedelta(
+            seconds=config.RESTART_DELAY_SECONDS)
+        leaders = leaders_with_pending_move(
+            db.leaderboard(state.game_id), caller_did, state.last_caller, points)
         text = build_gameover_text(state, coord, vote, source,
                                    safe_alternative if result == game.MINE else "",
-                                   record, crowd_moves, flag_line)
+                                   record, crowd_moves, flag_line,
+                                   build_mvp_line(leaders),
+                                   next_board_at)
         kind = "gameover"
     else:
         text = build_turn_text(state, coord, vote, source, flags)
@@ -556,8 +636,8 @@ def start_new_game() -> None:
 def _start_new_game() -> None:
     previous = db.load_state()
     game_id = (previous.game_id + 1) if previous else 1
-    state = game.new_game(game_id, rows=config.ROWS, cols=config.COLS,
-                          mines=config.MINES)
+    rows, cols, mines = next_board_settings(previous)
+    state = game.new_game(game_id, rows=rows, cols=cols, mines=mines)
     logger.info("Starting board %d (%dx%d, %d mines), opened at %s",
                 game_id, state.rows, state.cols, state.mine_count,
                 state.last_coord)

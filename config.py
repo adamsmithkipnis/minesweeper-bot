@@ -22,6 +22,18 @@ ROWS = int(os.environ.get("ROWS", "9"))
 COLS = int(os.environ.get("COLS", "9"))
 MINES = int(os.environ.get("MINES", "13"))
 
+# Adaptive board sizing. A well-participated win grows the next board by one
+# row and column; a board mostly played by the bot shrinks it. Separate grow
+# and shrink thresholds provide hysteresis so middling participation does not
+# make the board seesaw every game. Mine density stays close to the configured
+# starting board as dimensions change.
+ADAPTIVE_BOARD = os.environ.get("ADAPTIVE_BOARD", "1").lower() not in (
+    "0", "false", "no")
+MIN_BOARD_SIZE = int(os.environ.get("MIN_BOARD_SIZE", "7"))
+MAX_BOARD_SIZE = int(os.environ.get("MAX_BOARD_SIZE", "12"))
+GROW_PARTICIPATION = float(os.environ.get("GROW_PARTICIPATION", "0.75"))
+SHRINK_PARTICIPATION = float(os.environ.get("SHRINK_PARTICIPATION", "0.50"))
+
 # Pacing.
 TURN_MINUTES = int(os.environ.get("TURN_MINUTES", "60"))
 RESTART_DELAY_SECONDS = int(os.environ.get("RESTART_DELAY_SECONDS", "3600"))

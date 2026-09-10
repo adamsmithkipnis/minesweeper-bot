@@ -54,8 +54,9 @@ python3 tests/simulate.py --quorum 0 --voters 8    # try it without the quorum
 ## How a turn works
 
 1. Read the replies to the last post.
-2. Tally them. One vote per account, earliest reply wins, ties go to whoever
-   called the cell first. Votes for cells that are already open are dropped.
+2. Tally them. One vote per account; that account's latest valid reply counts.
+   Tied cells go to whichever was called first. Votes for cells that are
+   already open are dropped.
 3. Open the winning cell — unless three or more people voted and no two of
    them agreed, in which case nothing has actually been decided and the bot
    breaks the tie with its own safest cell, saying so in the post.
@@ -92,6 +93,18 @@ C3`, `🚩 C3`, `C3 and D4 are mines` and `unflag C3` all work, because the
 syntax has to be whatever people already write rather than a command they are
 expected to memorise.
 
+One player may flag several cells in one reply. Flags are only claims: they do
+not open cells, trigger mines, or prevent the crowd from opening a flagged
+cell later.
+
+### Adaptive boards
+
+The next board grows by one row and column after a win where the crowd called
+at least 75% of turns. It shrinks after a board where the crowd called fewer
+than 50% of turns, and otherwise stays the same. Boards are bounded to 7x7
+through 12x12 and preserve roughly the starting mine density. The separate
+thresholds keep participation near the boundary from resizing every game.
+
 Flags appear on the board as the classic pennant and tick the mine counter
 down. **A flag is a claim, never a verdict**: a wrong flag is drawn exactly
 like a right one, and a test pins that. Nor can a flag block a cell from being
@@ -119,6 +132,7 @@ gets clamped. Replies to individual followers carry one tag, not six.
 | `solver.py` | Deduction: single-cell rule, subset rule, exact enumeration |
 | `votes.py` | Coordinate parsing, vote tallying, flag claims (no network dependency) |
 | `renderer.py` | Board PNG and full-position alt text |
+| `tools/tutorial_image.py` | Rebuild the annotated pinned-tutorial image |
 | `bluesky.py` | AT Protocol wrapper, richtext facets, post deletion, dry run |
 | `db.py` | SQLite: board state, history, moves, post log |
 | `dashboard.py` | Read-only local dashboard |
@@ -176,6 +190,7 @@ Everything runs headlessly, with no network and no credentials:
 .venv/bin/python tests/simulate.py --games 300            # pacing
 .venv/bin/python tests/dryrun.py                          # a full board, posts written to disk
 .venv/bin/python tests/preview.py                         # sample board images
+.venv/bin/python tools/tutorial_image.py                  # pinned tutorial image
 ```
 
 `tests/dryrun.py` is the last check before going live. It runs the real turn
