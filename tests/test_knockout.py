@@ -236,3 +236,108 @@ class EliminationExpiry(unittest.TestCase):
         db.eliminate(1, "did:b", "b", "D4", turn_number=12)
         self.assertEqual(db.benched(1, 13, 4), {"did:b"})
         self.assertNotIn("did:a", db.benched(1, 13, 4))
+
+
+@unittest.skipUnless(HAS_PILLOW, "Pillow not installed (use .venv/bin/python)")
+class EveryMoverIsAcknowledged(unittest.TestCase):
+    """Everyone who acted is named, and everyone who acted is answered.
+
+    Knockout has no single winning caller, so a turn post that names only the
+    best scorer leaves most of the people who played invisible — and the board
+    post has no room for running totals, which is what people come back for.
+    """
+
+    def setUp(self):
+        self._knockout = config.KNOCKOUT
+        config.KNOCKOUT = True
+        self.state = game.new_game(1, rng=random.Random(5), mine_budget=2)
+        self.state.turn_number = 7
+
+    def tearDown(self):
+        config.KNOCKOUT = self._knockout
+
+    def plays(self, n, points=5, handle="player{}.bsky.social"):
+        return [main.Play(f"did:{i}", handle.format(i), "D4", game.SAFE,
+                          points - i, reply_uri=f"at://did:{i}/x",
+                          reply_cid="c") for i in range(n)]
+
+    def test_all_scorers_are_named_when_they_fit(self):
+        text = main.build_knockout_turn_text(self.state, self.plays(3))
+        for i in range(3):
+            self.assertIn(f"@player{i}.bsky.social", text)
+
+    def test_a_crowded_turn_counts_the_ones_it_cannot_fit(self):
+        text = main.build_knockout_turn_text(
+            self.state,
+            self.plays(8, handle="averylongplayerhandle{}.bsky.social"))
+        self.assertLessEqual(len(text), 300)
+        self.assertIn("more", text)
+        self.assertIn("@averylongplayerhandle0.bsky.social", text,
+                      "the best scorer must survive the trim")
+
+    def test_the_prompt_always_survives(self):
+        """The scorer line used to pass its own budget check and then be
+        dropped whole by the final trim, taking every name with it."""
+        for count in (1, 3, 8, 20):
+            text = main.build_knockout_turn_text(self.state, self.plays(count))
+            self.assertLessEqual(len(text), 300, f"{count} scorers")
+            self.assertIn("min.", text, f"{count} scorers lost the prompt")
+            self.assertIn("🏅", text, f"{count} scorers lost the scoreline")
+
+    def test_the_reply_carries_both_totals(self):
+        reply = main.build_knockout_credit_reply(
+            self.state, self.plays(1)[0], this_board=14, all_time=203)
+        self.assertIn("+5 points", reply)
+        self.assertIn("This board: 14", reply)
+        self.assertIn("All time: 203", reply)
+        self.assertLessEqual(len(reply), 300)
+
+    def test_the_reply_to_a_knocked_out_player_says_how_long(self):
+        play = main.Play("did:a", "a.bsky.social", "G7", game.MINE,
+                         reply_uri="at://a/x", reply_cid="c")
+        reply = main.build_knockout_credit_reply(self.state, play, 14, 203)
+        self.assertIn("a mine", reply)
+        self.assertIn(f"{config.ELIMINATION_TURNS} turns", reply)
+        self.assertIn("All time: 203", reply)
+        self.assertLessEqual(len(reply), 300)
+
+    def test_every_player_who_acted_gets_answered(self):
+        sent = []
+        real_reply, real_points, real_remember = (
+            main.bluesky.post_reply, main.db.player_points, main._remember)
+        main.bluesky.post_reply = lambda text, **kw: (
+            sent.append((text, kw.get("parent_uri"))) or "at://sent/1")
+        main.db.player_points = lambda did, game_id=None: 10
+        main._remember = lambda *a, **k: None
+        try:
+            plays = self.plays(4)
+            plays.append(main.Play("", "", "Z9", game.SAFE, 1))   # the bot
+            main._credit_knockout_players(self.state, plays)
+        finally:
+            (main.bluesky.post_reply, main.db.player_points,
+             main._remember) = real_reply, real_points, real_remember
+
+        self.assertEqual(len(sent), 4, "one reply per player, none for the bot")
+        self.assertEqual({uri for _, uri in sent},
+                         {f"at://did:{i}/x" for i in range(4)})
+
+    def test_one_failed_reply_does_not_cost_the_others(self):
+        sent = []
+        real_reply, real_points, real_remember = (
+            main.bluesky.post_reply, main.db.player_points, main._remember)
+
+        def flaky(text, **kw):
+            if kw.get("parent_uri") == "at://did:1/x":
+                raise RuntimeError("rate limited")
+            sent.append(kw.get("parent_uri"))
+            return "at://sent/1"
+
+        main.bluesky.post_reply = flaky
+        main.db.player_points = lambda did, game_id=None: 10
+        main._remember = lambda *a, **k: None
+        try:
+            main._credit_knockout_players(self.state, self.plays(4))
+        finally:
+            (main.bluesky.post_reply, main.db.player_points,
+             main._remember) = real_reply, real_points, real_remember
+        self.assertEqual(len(sent), 3)

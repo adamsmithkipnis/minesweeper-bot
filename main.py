@@ -266,11 +266,37 @@ def build_flag_reply(coords: list, total_flagged: int) -> str:
     it shows everyone else in the thread that it worked.
     """
     which = coords[0] if len(coords) == 1 else ", ".join(coords[:3])
+    also = ("open a cell somewhere else" if config.KNOCKOUT
+            else "vote to open somewhere else")
     return _with_tags(
         f"🚩 Flagged {which}. It shows on the board and costs no turn — "
-        f"you can flag and still vote to open somewhere else in the same "
-        f"reply.\n\n"
+        f"you can flag and still {also} in the same reply.\n\n"
         f"{_plural(total_flagged, 'cell')} flagged so far.",
+        tags=[config.REPLY_HASHTAG])
+
+
+def build_knockout_credit_reply(state: game.GameState, play,
+                                this_board: int, all_time: int) -> str:
+    """Tell one player what their move did and what they are on.
+
+    Every player acts every turn in knockout, so this is the only place most
+    of them see a score at all — the board post has room for a name and a
+    number, not a running total.
+    """
+    if play.result == game.MINE:
+        head = (f"💥 You opened {play.coord} on turn {state.turn_number} — "
+                f"a mine. You're out for "
+                f"{_plural(config.ELIMINATION_TURNS, 'turn')}, then you're "
+                f"back. Flag away while you wait.")
+        scored = ""
+    else:
+        head = (f"🎯 You opened {play.coord} on turn {state.turn_number} — "
+                f"it {_outcome_phrase(state, play.coord)}.")
+        scored = f"\n+{_plural(play.points, 'point')}"
+    return _with_tags(
+        f"{head}\n{scored}\n"
+        f"This board: {this_board}\n"
+        f"All time: {all_time}",
         tags=[config.REPLY_HASHTAG])
 
 
@@ -365,6 +391,10 @@ class Play:
     coord: str
     result: str
     points: int = 0
+    reply_uri: str = ""     # the reply that asked for it, so we can answer it
+    reply_cid: str = ""
+    root_uri: str = ""
+    root_cid: str = ""
 
 
 def mine_budget_for(tier: int) -> int:
@@ -497,14 +527,22 @@ def apply_knockout_moves(state: game.GameState, replies: list,
                              move.coord, state.turn_number)
             except Exception:
                 logger.exception("Failed to record an elimination")
-            plays.append(Play(move.did, move.handle, move.coord, outcome))
+            plays.append(Play(move.did, move.handle, move.coord, outcome,
+                              reply_uri=move.reply.uri,
+                              reply_cid=move.reply.cid,
+                              root_uri=move.reply.root_uri,
+                              root_cid=move.reply.root_cid))
             logger.info("Turn %d: %s hit %s and is out (%d spare(s) left)",
                         state.turn_number, move.handle, move.coord,
                         state.spares_left)
         else:
             plays.append(Play(move.did, move.handle, move.coord, outcome,
                               (len(state.revealed) - before)
-                              * tier_multiplier(state)))
+                              * tier_multiplier(state),
+                              reply_uri=move.reply.uri,
+                              reply_cid=move.reply.cid,
+                              root_uri=move.reply.root_uri,
+                              root_cid=move.reply.root_cid))
         if state.status != game.ACTIVE:
             break
 
@@ -536,12 +574,34 @@ def build_knockout_turn_text(state: game.GameState, plays: list,
     for play in out[:2]:
         lines.append(f"💥 @{play.handle} hit {play.coord} and is out. "
                      f"{_plural(state.spares_left, 'spare')} left.")
-    if scorers:
-        lines.append(f"🏅 @{scorers[0].handle} +{scorers[0].points}")
 
-    body = "\n".join(lines)
+    # The prompt is fixed and must survive, so budget against its real length
+    # rather than a guessed reserve — guessing let the scorer line pass its
+    # own check and then be dropped whole by the trim below.
     ask = _knockout_ask_line(state, flags,
                              _should_teach_flagging(state, flags))
+    room = bluesky.POST_LIMIT - len(ask) - 2
+
+    # Everyone who opened something, best first — not just the top scorer.
+    # Names are added one at a time so a crowded turn keeps as many as fit and
+    # counts the rest, instead of losing the line altogether.
+    if scorers:
+        shown, dropped = [], 0
+        for play in scorers:
+            entry = f"@{play.handle} +{play.points}"
+            trial = lines + ["🏅 " + " · ".join(shown + [entry])]
+            if len("\n".join(trial)) <= room:
+                shown.append(entry)
+            else:
+                dropped += 1
+        if shown:
+            line = "🏅 " + " · ".join(shown)
+            if dropped:
+                line += f" +{dropped} more"
+            if len("\n".join(lines + [line])) <= room:
+                lines.append(line)
+
+    body = "\n".join(lines)
     while len(f"{body}\n\n{ask}") > bluesky.POST_LIMIT and len(lines) > 1:
         lines.pop()
         body = "\n".join(lines)
@@ -621,6 +681,30 @@ def _resolve_flags(state: game.GameState, coord: str, result: str,
             logger.info("Scored %d flag claim(s)", scored)
     except Exception:
         logger.exception("Failed to resolve flags")
+
+
+def _credit_knockout_players(state: game.GameState, plays: list) -> None:
+    """Reply to each player who acted, with their score.
+
+    Called after the moves are recorded so the totals include this turn.
+    Each reply is independent: one failure must not cost anybody else theirs,
+    and none of them may break a turn that has already posted.
+    """
+    for play in plays:
+        if not play.did or not play.reply_uri:
+            continue
+        try:
+            text = build_knockout_credit_reply(
+                state, play,
+                db.player_points(play.did, state.game_id),
+                db.player_points(play.did))
+            uri = bluesky.post_reply(text, parent_uri=play.reply_uri,
+                                     parent_cid=play.reply_cid,
+                                     root_uri=play.root_uri,
+                                     root_cid=play.root_cid)
+            _remember(uri, "credit", state.game_id, state.turn_number)
+        except Exception:
+            logger.exception("Failed to credit %s", play.handle)
 
 
 def _confirm_first_flag(state: game.GameState, claimed: dict) -> None:
@@ -922,6 +1006,8 @@ def _play_knockout_turn(state: game.GameState, replies: list,
                                game.coord_to_index(play.coord) in analysis.safe))
         except Exception:
             logger.exception("Failed to record move %s", play.coord)
+
+    _credit_knockout_players(state, plays)
 
     if not finished:
         _resolve_flags(state, last.coord, last.result, revealed_before)
