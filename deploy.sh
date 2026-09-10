@@ -79,10 +79,17 @@ fi
   || die "dependency install failed"
 
 if [ "$SKIP_TESTS" -eq 0 ]; then
-  say "running tests"
-  if ! "$VENV/bin/python" -m unittest discover -s tests -t tests -q 2>&1 | tail -5; then
-    die "tests failed — not restarting; the running bot is untouched"
-  fi
+  # Both modes, not just the one .env happens to select. The post builders
+  # read config at call time, so a suite run under KNOCKOUT=0 says nothing
+  # about KNOCKOUT=1 — which is how a 312-character opening post reached a
+  # deploy after a clean local run.
+  for mode in 0 1; do
+    say "running tests (KNOCKOUT=$mode)"
+    if ! KNOCKOUT=$mode "$VENV/bin/python" -m unittest discover \
+         -s tests -t tests -q 2>&1 | tail -5; then
+      die "tests failed with KNOCKOUT=$mode — not restarting; the running bot is untouched"
+    fi
+  done
 fi
 
 if [ "$RESTART" -eq 0 ]; then

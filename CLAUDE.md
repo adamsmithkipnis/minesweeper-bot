@@ -21,9 +21,15 @@ and a blocked deploy.
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -t tests
+KNOCKOUT=1 .venv/bin/python -m unittest discover -s tests -t tests
 ```
 
-`deploy.sh` runs this too and aborts the restart if it fails, so a red suite
+**Run it in both modes.** The post builders read config at call time, so a
+machine with no `.env` tests voting mode only and tells you nothing about
+knockout. That is exactly how a 312-character opening post survived a clean
+local run and was caught by the deploy on the Mini.
+
+`deploy.sh` runs both and aborts the restart if either fails, so a red suite
 means the change simply never reaches the live bot. If a change affects the
 rules, the solver, or the voting policy, also run:
 

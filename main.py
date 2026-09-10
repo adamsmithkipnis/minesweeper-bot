@@ -163,24 +163,39 @@ def build_turn_text(state: game.GameState, coord: str, vote, source: str,
 
 
 def build_opening_text(state: game.GameState, record: dict) -> str:
-    scoreline = ""
-    if record["played"]:
-        scoreline = (f"All time: {record['cleared']} cleared, "
-                     f"{record['exploded']} lost.\n")
+    """The new-board post, budgeted so it can never be clamped.
+
+    Knockout's copy is longer than voting's, and a tier-3 banner is longer
+    than a tier-1 one, so the fixed layout that fitted in one mode at one tier
+    overflowed in another. The parts a reader cannot play without are built
+    first; the rest is added only while the whole post still fits.
+    """
     tier = tier_of(state)
     banner = (f"💣 NEW BOARD — Tier {tier + 1} · "
               f"{state.rows}x{state.cols}, {state.mine_count} mines"
-              + (f", {tier + 1}x points.\n\n" if tier else ".\n\n"))
-    return _with_tags(
-        banner + 
-        f"I opened {state.last_coord} to start us off. "
-        + ("You each pick a cell. A mine takes you out; "
-           f"{_plural(state.mine_budget, 'spare')} before the board falls.\n"
-           if config.KNOCKOUT else
-           "You pick the rest — one mine ends the run.\n")
-        + f"{scoreline}\n"
-        + (_knockout_ask_line(state, teach_flagging=True) if config.KNOCKOUT
-           else _ask_line(state, teach_flagging=True)))
+              + (f", {tier + 1}x points." if tier else "."))
+    ask = (_knockout_ask_line(state, teach_flagging=True) if config.KNOCKOUT
+           else _ask_line(state, teach_flagging=True))
+    required = f"{banner}\n\n{ask}"
+
+    rules = ("You each pick a cell. A mine takes you out; "
+             f"{_plural(state.mine_budget, 'spare')} before the board falls."
+             if config.KNOCKOUT else
+             "You pick the rest — one mine ends the run.")
+    optional = [f"I opened {state.last_coord} to start us off. {rules}"]
+    if record["played"]:
+        optional.append(f"All time: {record['cleared']} cleared, "
+                        f"{record['exploded']} lost.")
+
+    kept = []
+    for line in optional:
+        candidate = kept + [line]
+        body = f"{banner}\n\n" + "\n".join(candidate) + f"\n\n{ask}"
+        if len(body) <= bluesky.POST_LIMIT:
+            kept = candidate
+    if not kept:
+        return _with_tags(required)
+    return _with_tags(f"{banner}\n\n" + "\n".join(kept) + f"\n\n{ask}")
 
 
 def build_tutorial_text(state: game.GameState) -> str:
