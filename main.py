@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import logging
 import random
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -391,6 +392,7 @@ class Play:
     coord: str
     result: str
     points: int = 0
+    note: str = ""          # why the bot chose this, when the bot chose it
     reply_uri: str = ""     # the reply that asked for it, so we can answer it
     reply_cid: str = ""
     root_uri: str = ""
@@ -556,7 +558,8 @@ def apply_knockout_moves(state: game.GameState, replies: list,
     outcome = game.reveal(state, *cell)
     logger.info("Turn %d by bot (%s): %s", state.turn_number, reason, coord)
     return [Play("", "", coord, outcome,
-                 (len(state.revealed) - before) * tier_multiplier(state))], "bot"
+                 (len(state.revealed) - before) * tier_multiplier(state),
+                 note=reason)], "bot"
 
 
 def build_knockout_turn_text(state: game.GameState, plays: list,
@@ -568,8 +571,21 @@ def build_knockout_turn_text(state: game.GameState, plays: list,
     scorers = sorted((p for p in plays if p.result == game.SAFE and p.did),
                      key=lambda p: -p.points)
 
-    head = (f"Turn {state.turn_number} · {_plural(movers, 'player')} moved"
-            if movers else f"Turn {state.turn_number} · nobody moved, so I did")
+    if movers:
+        head = f"Turn {state.turn_number} · {_plural(movers, 'player')} moved"
+    else:
+        # Say when the bot gambled. A turn where it took a real risk with the
+        # board is the most interesting thing that can happen with nobody
+        # watching, and reporting it as routine hides that.
+        note = plays[0].note if plays else ""
+        odds = re.search(r"(\d+)%", note)
+        if odds:
+            head = (f"Turn {state.turn_number} · nobody around and no safe "
+                    f"cell. I gambled on {plays[0].coord} at {odds.group(1)}%.")
+        else:
+            head = (f"Turn {state.turn_number} · nobody moved, so I opened "
+                    f"{plays[0].coord}." if plays else
+                    f"Turn {state.turn_number} · nobody moved")
     lines = [head]
     for play in out[:2]:
         lines.append(f"💥 @{play.handle} hit {play.coord} and is out. "
