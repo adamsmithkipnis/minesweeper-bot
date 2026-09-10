@@ -85,6 +85,14 @@ class GameState:
     last_voters: int = 0
     exploded_cell: str = ""               # the mine that ended the run
 
+    # Knockout play. A mine takes the player who opened it out of the board
+    # rather than ending it for everybody, and the board itself only fails
+    # once more than `mine_budget` of them have gone off. Budget 0 is the
+    # original game: the first mine ends the run.
+    mine_budget: int = 0
+    detonations: int = 0
+    spent_mines: set = field(default_factory=set)   # {(r, c)} already hit
+
     # ---- derived helpers -------------------------------------------------
 
     @property
@@ -102,8 +110,18 @@ class GameState:
                 if (r, c) not in self.revealed]
 
     def is_cleared(self) -> bool:
-        """Every non-mine cell is open — the crowd has won."""
+        """Every non-mine cell is open — the crowd has won.
+
+        Spent mines are deliberately not in `revealed`: they are not safe
+        cells, and counting them would let a board "clear" without every safe
+        cell being opened.
+        """
         return len(self.revealed) >= self.total_safe
+
+    @property
+    def spares_left(self) -> int:
+        """How many more detonations the board can absorb before it fails."""
+        return max(0, self.mine_budget - self.detonations)
 
     def coord_is_revealed(self, coord: str) -> bool:
         try:
@@ -136,7 +154,7 @@ def _place_mines(rows: int, cols: int, count: int, safe_cell: tuple,
 
 
 def new_game(game_id: int, rows: int = DEFAULT_ROWS, cols: int = DEFAULT_COLS,
-             mines: int = DEFAULT_MINES,
+             mines: int = DEFAULT_MINES, mine_budget: int = 0,
              rng: random.Random | None = None) -> GameState:
     """A fresh board with its opening region already revealed.
 
@@ -152,6 +170,7 @@ def new_game(game_id: int, rows: int = DEFAULT_ROWS, cols: int = DEFAULT_COLS,
         cols=cols,
         mine_count=mines,
         mine_cells=_place_mines(rows, cols, mines, start, rng),
+        mine_budget=mine_budget,
     )
     reveal(state, *start)
     state.last_coord = index_to_coord(*start)
@@ -166,12 +185,18 @@ def reveal(state: GameState, r: int, c: int) -> str:
     Returns SAFE, MINE, or ALREADY. Hitting a mine sets status to EXPLODED —
     sudden death, one mine ends the run.
     """
-    if (r, c) in state.revealed:
+    if (r, c) in state.revealed or (r, c) in state.spent_mines:
         return ALREADY
 
-    if (r, c) in state.mine_cells:
-        state.status = EXPLODED
+    if (r, c) in state.mine_cells and (r, c) not in state.spent_mines:
+        state.detonations += 1
+        state.spent_mines.add((r, c))
         state.exploded_cell = index_to_coord(r, c)
+        # In knockout play the board absorbs a set number of detonations; the
+        # player who found each one is out, but everyone else plays on, and
+        # the spent mine stays visible as information for the survivors.
+        if state.detonations > state.mine_budget:
+            state.status = EXPLODED
         return MINE
 
     # Iterative flood fill. Zeros pull in their neighbours; numbered cells

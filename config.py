@@ -22,8 +22,62 @@ ROWS = int(os.environ.get("ROWS", "9"))
 COLS = int(os.environ.get("COLS", "9"))
 MINES = int(os.environ.get("MINES", "13"))
 
+# Difficulty tiers. A well-participated win promotes the next board a tier; a
+# board mostly played by the bot demotes it. Separate grow and shrink
+# thresholds give hysteresis, so middling participation does not seesaw.
+#
+# Tiers raise size and mine DENSITY together, which is the part that matters.
+# Growing dimensions alone makes a board longer and *shallower* — at a fixed
+# density a larger board is proportionally more open interior and less
+# frontier, so more of its turns are trivially decidable. Simulated over 150
+# boards each, at 30-minute turns:
+#
+#     9x9/13   16%   75% cleared   10h   1.2 turns needing real deduction
+#     10x10/18 18%   73% cleared   15h   2.3
+#     11x11/24 20%   61% cleared   20h   3.5
+#     12x12/23 16%   83% cleared   43h   0.8   <- size alone: longer, shallower
+#
+# The ladder stops at three tiers on purpose. A fourth (12x12/32 at 22%)
+# clears only 38%: a full day invested and two boards in three end in a bang.
+ADAPTIVE_BOARD = os.environ.get("ADAPTIVE_BOARD", "1").lower() not in (
+    "0", "false", "no")
+GROW_PARTICIPATION = float(os.environ.get("GROW_PARTICIPATION", "0.75"))
+SHRINK_PARTICIPATION = float(os.environ.get("SHRINK_PARTICIPATION", "0.50"))
+
+
+def _parse_tiers(raw: str) -> list:
+    """"9x9:13,10x10:18" -> [(9, 9, 13), (10, 10, 18)]."""
+    tiers = []
+    for chunk in raw.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        shape, _, mines = chunk.partition(":")
+        rows, _, cols = shape.lower().partition("x")
+        tiers.append((int(rows), int(cols), int(mines)))
+    return tiers
+
+
+TIERS = _parse_tiers(os.environ.get(
+    "TIERS", "9x9:13, 10x10:18, 11x11:24"))
+
+# Knockout play. Every eligible player opens their own cell each turn instead
+# of the crowd voting on one. A mine takes that player out of the board rather
+# than ending it for everybody — but the board itself fails once more than
+# `tier + MINE_BUDGET_BASE` mines have gone off, so collective stakes survive.
+# At base 1 that is roughly a 20% board loss on every tier; base 2 leaves
+# boards clearing 93-98%, where the collective stake stops meaning much.
+#
+# Without the knockout rule, letting everyone act is ruinous: with N players
+# each independently risking a mine, survival per turn is skill^N, and at the
+# 87.5% accuracy this game actually shows, five players clear only 52% of
+# boards in 5 turns. It also gets worse as the audience grows. Making a mine
+# cost the player instead of the board inverts that — eight players clear 98%.
+KNOCKOUT = os.environ.get("KNOCKOUT", "0").lower() not in ("0", "false", "no")
+MINE_BUDGET_BASE = int(os.environ.get("MINE_BUDGET_BASE", "1"))
+
 # Pacing.
-TURN_MINUTES = int(os.environ.get("TURN_MINUTES", "60"))
+TURN_MINUTES = int(os.environ.get("TURN_MINUTES", "30"))
 RESTART_DELAY_SECONDS = int(os.environ.get("RESTART_DELAY_SECONDS", "3600"))
 
 # How many people must agree before the crowd's pick is played — but only

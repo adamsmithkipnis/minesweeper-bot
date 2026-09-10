@@ -54,8 +54,9 @@ python3 tests/simulate.py --quorum 0 --voters 8    # try it without the quorum
 ## How a turn works
 
 1. Read the replies to the last post.
-2. Tally them. One vote per account, earliest reply wins, ties go to whoever
-   called the cell first. Votes for cells that are already open are dropped.
+2. Tally them. One vote per account; that account's latest valid reply counts.
+   Tied cells go to whichever was called first. Votes for cells that are
+   already open are dropped.
 3. Open the winning cell — unless three or more people voted and no two of
    them agreed, in which case nothing has actually been decided and the bot
    breaks the tie with its own safest cell, saying so in the post.
@@ -92,6 +93,71 @@ C3`, `🚩 C3`, `C3 and D4 are mines` and `unflag C3` all work, because the
 syntax has to be whatever people already write rather than a command they are
 expected to memorise.
 
+One player may flag several cells in one reply. Flags are only claims: they do
+not open cells, trigger mines, or prevent the crowd from opening a flagged
+cell later.
+
+### Knockout play
+
+Off by default (`KNOCKOUT=1` to enable). Instead of the crowd voting on one
+cell, **everyone who replies opens a cell of their own** — nobody's move is
+discarded. A mine takes *that player* out of the board rather than ending it
+for everybody, and the spent mine stays visible as information for whoever is
+left. The board itself fails once more than `tier + 1` mines have gone off.
+
+Eliminated players can still flag. Flagging costs no turn and carries no risk,
+so being knocked out is a change of role rather than an exit — you keep
+scoring and keep helping the survivors.
+
+**Letting everyone act is only survivable because of the knockout rule.** With
+N players each independently risking a mine, survival per turn is `skill^N`.
+At the 87.5% accuracy this game actually shows, five players acting under
+sudden death clear 52% of boards in five turns — and it gets *worse* as the
+audience grows, dropping to 44% at eight players. Making a mine cost the
+player instead of the board inverts that: eight players clear 98%.
+
+| board | cleared | median turns | at 60-min turns |
+| --- | --- | --- | --- |
+| 9x9, 13 mines, 1 spare | 81% | 7 | 7h |
+| 10x10, 18 mines, 2 spares | 87% | 10 | 10h |
+| 11x11, 24 mines, 3 spares | 83% | 15 | 15h |
+
+A spare per tier loses roughly a fifth of boards on every rung, which is the
+right weight when being knocked out yourself is the main event; two spares
+leaves boards clearing 93-98% and the collective stake stops meaning much.
+
+Knockout moves a board roughly five times faster than voting does, so it
+pairs with `TURN_MINUTES=60`. Voting pairs with 30.
+
+### Difficulty tiers
+
+A win where the crowd called at least 75% of the turns promotes the next board
+a tier. A board where they called fewer than 50% demotes it. Losing holds the
+tier — losing a hard board is the game working; a board the bot had to play
+itself is one nobody is playing. The gap between the two thresholds stops
+participation near the boundary from seesawing the board every game.
+
+| tier | board | density | cleared | length at 30-min turns | points |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 9x9, 13 mines | 16% | 84% | 12h | 1x |
+| 2 | 10x10, 18 mines | 18% | 79% | 17h | 2x |
+| 3 | 11x11, 24 mines | 20% | 51% | 18h | 3x |
+
+**Tiers raise size and density together, and that pairing is the point.**
+Growing dimensions alone makes a board longer and *shallower*: at a fixed
+density a larger board is proportionally more open interior and less frontier,
+so more of its turns are trivially decidable. Simulated over 150 boards, a
+12x12 at the starting 16% density runs 43 hours and contains 0.8 turns needing
+real deduction — fewer than the 9x9 it grew from, which has 1.5.
+
+The ladder stops at three rungs deliberately. A fourth (12x12 at 22%) clears
+only 38%: a full day invested and two boards in three end in a bang.
+
+Cells are worth the tier number in points, so the reward rises with the
+stakes. Scaling points rather than handing out extra cells per turn matters:
+harder boards run longer, so the extra reward is spread over *more* turns
+rather than concentrated into fewer.
+
 Flags appear on the board as the classic pennant and tick the mine counter
 down. **A flag is a claim, never a verdict**: a wrong flag is drawn exactly
 like a right one, and a test pins that. Nor can a flag block a cell from being
@@ -119,6 +185,7 @@ gets clamped. Replies to individual followers carry one tag, not six.
 | `solver.py` | Deduction: single-cell rule, subset rule, exact enumeration |
 | `votes.py` | Coordinate parsing, vote tallying, flag claims (no network dependency) |
 | `renderer.py` | Board PNG and full-position alt text |
+| `tools/tutorial_image.py` | Rebuild the annotated pinned-tutorial image |
 | `bluesky.py` | AT Protocol wrapper, richtext facets, post deletion, dry run |
 | `db.py` | SQLite: board state, history, moves, post log |
 | `dashboard.py` | Read-only local dashboard |
@@ -176,6 +243,7 @@ Everything runs headlessly, with no network and no credentials:
 .venv/bin/python tests/simulate.py --games 300            # pacing
 .venv/bin/python tests/dryrun.py                          # a full board, posts written to disk
 .venv/bin/python tests/preview.py                         # sample board images
+.venv/bin/python tools/tutorial_image.py                  # pinned tutorial image
 ```
 
 `tests/dryrun.py` is the last check before going live. It runs the real turn

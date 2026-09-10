@@ -23,8 +23,12 @@ from helpers import game, solver     # noqa: F401  (helpers fixes sys.path)
 
 
 def play(rows: int, cols: int, mines: int, voters: int, skill: float,
-         quorum: int, rng: random.Random) -> dict:
-    state = game.new_game(1, rows=rows, cols=cols, mines=mines, rng=rng)
+         quorum: int, rng: random.Random, mine_budget: int = 0) -> dict:
+    """One board. With `mine_budget` set, every player acts each turn and a
+    mine knocks that player out instead of ending the board."""
+    state = game.new_game(1, rows=rows, cols=cols, mines=mines, rng=rng,
+                          mine_budget=mine_budget)
+    alive = set(range(voters))
     turns = 0
     bot_moves = 0
     levels = Counter()
@@ -41,6 +45,24 @@ def play(rows: int, cols: int, mines: int, voters: int, skill: float,
                    for n in game.neighbors(c[0], c[1], rows, cols))
         ) or sorted(hidden)
         pool = sorted(analysis.safe)
+
+        if mine_budget:
+            # Knockout: everybody still standing opens a cell of their own.
+            turns += 1
+            actors = sorted(alive)
+            if not actors:
+                cell, _ = solver.safest_move(position, analysis)
+                bot_moves += 1
+                game.reveal(state, *cell)
+                continue
+            for player in actors:
+                cell = (rng.choice(pool) if (pool and rng.random() < skill)
+                        else rng.choice(frontier))
+                if game.reveal(state, *cell) == game.MINE:
+                    alive.discard(player)
+                if state.status != game.ACTIVE:
+                    break
+            continue
 
         ballots = [
             rng.choice(pool) if (pool and rng.random() < skill)
@@ -75,13 +97,16 @@ def main() -> int:
     parser.add_argument("--quorum", type=int, default=2)
     parser.add_argument("--turn-minutes", type=int, default=60)
     parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--mine-budget", type=int, default=0,
+                        help="knockout play: detonations the board absorbs "
+                             "before it fails (0 = sudden death)")
     parser.add_argument("--check", action="store_true",
                         help="exit non-zero if the median lands outside 18-28 turns")
     args = parser.parse_args()
 
     rng = random.Random(args.seed)
     results = [play(args.rows, args.cols, args.mines, args.voters,
-                    args.skill, args.quorum, rng)
+                    args.skill, args.quorum, rng, args.mine_budget)
                for _ in range(args.games)]
 
     turns = sorted(r["turns"] for r in results)
@@ -97,7 +122,9 @@ def main() -> int:
 
     print(f"{args.rows}x{args.cols} with {args.mines} mines "
           f"({args.mines / (args.rows * args.cols):.1%} density), "
-          f"{args.voters} voters at skill {args.skill}, quorum {args.quorum}")
+          f"{args.voters} voters at skill {args.skill}, "
+          + (f"knockout, budget {args.mine_budget}" if args.mine_budget
+             else f"quorum {args.quorum}"))
     print(f"  {args.games} games")
     print(f"  boards cleared      {len(cleared) / args.games:6.1%}")
     print(f"  median turns        {median:6.1f}"

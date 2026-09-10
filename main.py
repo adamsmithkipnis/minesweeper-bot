@@ -22,6 +22,7 @@ import logging
 import random
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -104,6 +105,28 @@ def _credit_line(vote, source: str) -> str:
             f"so I broke the tie myself.")
 
 
+def _knockout_ask_line(state: game.GameState, flags=(),
+                       teach_flagging: bool = False) -> str:
+    """The prompt for knockout play.
+
+    Nothing about voting: everybody who replies acts, so the rules a reader
+    needs are what a mine costs them and that flagging keeps them in the game
+    afterwards.
+    """
+    left = state.total_safe - len(state.revealed)
+    last = f"{game.row_letters(state.rows)[-1]}{state.cols}"
+    counted = (f"{_plural(left, 'cell')} left, "
+               f"{_plural(state.spares_left, 'spare')}"
+               + (f", {len(flags)} flagged.\n" if flags else ".\n"))
+    if teach_flagging:
+        ask = (f"Everyone who replies opens a cell. A mine takes you out of "
+               f"this board — you can still flag.\n")
+    else:
+        ask = (f"Reply a coordinate, A1 to {last}. Everyone who replies "
+               f"opens one.\n")
+    return f"{counted}{ask}{config.TURN_MINUTES} min."
+
+
 def _ask_line(state: game.GameState, flags=(), teach_flagging: bool = False) -> str:
     """The prompt. Nobody flags a cell unless something invites them to.
 
@@ -117,8 +140,8 @@ def _ask_line(state: game.GameState, flags=(), teach_flagging: bool = False) -> 
     counted = (f"{_plural(left, 'cell')} left, {state.mine_count} mines"
                + (f", {len(flags)} flagged.\n" if flags else ".\n"))
     if teach_flagging:
-        ask = (f"Reply a coordinate to open it, A1 to {last} — "
-               f"or 'flag' one you think is a mine.\n")
+        ask = (f"Open: D4 · Flag: 'flag C3' · Change vote: reply again.\n"
+               f"One vote can decide; with 3+ voters, 2 must agree.\n")
     else:
         ask = f"Reply with a coordinate, A1 to {last}.\n"
     return f"{counted}{ask}{config.TURN_MINUTES} min."
@@ -144,18 +167,43 @@ def build_opening_text(state: game.GameState, record: dict) -> str:
     if record["played"]:
         scoreline = (f"All time: {record['cleared']} cleared, "
                      f"{record['exploded']} lost.\n")
+    tier = tier_of(state)
+    banner = (f"💣 NEW BOARD — Tier {tier + 1} · "
+              f"{state.rows}x{state.cols}, {state.mine_count} mines"
+              + (f", {tier + 1}x points.\n\n" if tier else ".\n\n"))
     return _with_tags(
-        f"💣 NEW BOARD — {state.rows}x{state.cols}, "
-        f"{state.mine_count} mines.\n\n"
+        banner + 
         f"I opened {state.last_coord} to start us off. "
-        f"You pick the rest — one mine ends the run.\n"
-        f"{scoreline}\n"
-        f"{_ask_line(state, teach_flagging=True)}")
+        + ("You each pick a cell. A mine takes you out; "
+           f"{_plural(state.mine_budget, 'spare')} before the board falls.\n"
+           if config.KNOCKOUT else
+           "You pick the rest — one mine ends the run.\n")
+        + f"{scoreline}\n"
+        + (_knockout_ask_line(state, teach_flagging=True) if config.KNOCKOUT
+           else _ask_line(state, teach_flagging=True)))
+
+
+def build_tutorial_text(state: game.GameState) -> str:
+    """Canonical copy for the pinned how-to post.
+
+    Keeping this generated and tested prevents the public tutorial from
+    drifting away from the parser and quorum rules again.
+    """
+    last = f"{game.row_letters(state.rows)[-1]}{state.cols}"
+    return _with_tags(
+        f"HOW TO PLAY · Reply on the latest board (to {last})\n\n"
+        f"Open a cell: D4\n"
+        f"Flag mines: flag C3 (several are okay)\n"
+        f"Explain + play: C3 is a mine, so D4 is safe — D4\n"
+        f"Change your vote: reply again; your latest choice counts.\n\n"
+        f"One vote can decide. With 3+ voters, 2 must agree; "
+        f"tied cells go to the earliest vote.")
 
 
 def build_gameover_text(state: game.GameState, coord: str, vote, source: str,
                         had_safe: str, record: dict, crowd_moves: int = 0,
-                        flag_line: str = "") -> str:
+                        flag_line: str = "", mvp_line: str = "",
+                        next_board_at: datetime | None = None) -> str:
     opened, total = len(state.revealed), state.total_safe
     if state.status == game.CLEARED:
         head = (f"🎉 BOARD CLEARED in {_plural(state.turn_number, 'turn')}!\n"
@@ -172,10 +220,13 @@ def build_gameover_text(state: game.GameState, coord: str, vote, source: str,
     # that must survive. Recognition lines are added only while the whole post
     # still fits — otherwise the clamp eats the end of the post instead, which
     # is how "New board in an hour" became "New bo…".
+    next_phrase = (next_board_at.astimezone().strftime("%a %-I:%M %p %Z")
+                   if next_board_at else f"in {_restart_phrase()}")
     required = (f"All time: {record['cleared']} cleared, "
                 f"{record['exploded']} lost.\n"
-                f"New board in {_restart_phrase()}.")
+                f"Next board: {next_phrase}. Follow to catch the opening.")
     optional = [
+        mvp_line,
         f"You called {crowd_moves} of {_plural(state.turn_number, 'move')}."
         if crowd_moves else "",
         flag_line,
@@ -249,6 +300,117 @@ def build_flag_line(scores: list) -> str:
     return line + "."
 
 
+def build_mvp_line(leaders: list) -> str:
+    """Compact board-end recognition in the main feed."""
+    if not leaders:
+        return ""
+    best = leaders[0]
+    return (f"🏅 Board MVP: @{best['handle']} — "
+            f"{_plural(best['points'], 'point')}.")
+
+
+def leaders_with_pending_move(leaders: list, did: str, handle: str,
+                              points: int) -> list:
+    """Include the just-played move without saving it before posting succeeds."""
+    out = [dict(row) for row in leaders]
+    if did:
+        found = next((row for row in out if row["did"] == did), None)
+        if found:
+            found["points"] += points
+            found["moves"] += 1
+        else:
+            out.append({"did": did, "handle": handle,
+                        "points": points, "moves": 1})
+    return sorted(out, key=lambda row: (-row["points"], row["moves"]))
+
+
+def tier_of(state: game.GameState | None) -> int:
+    """Which rung of the ladder a board is on, by its dimensions.
+
+    Derived rather than stored, so an in-progress board survives a change to
+    the tier list and no migration is needed.
+    """
+    if state is None or not config.TIERS:
+        return 0
+    for index, (rows, cols, _) in enumerate(config.TIERS):
+        if (rows, cols) == (state.rows, state.cols):
+            return index
+    # An unrecognised size (hand-set in .env, or a retired tier) maps to the
+    # nearest rung by area rather than silently resetting to the bottom.
+    return min(range(len(config.TIERS)),
+               key=lambda i: abs(config.TIERS[i][0] * config.TIERS[i][1]
+                                 - state.rows * state.cols))
+
+
+@dataclass
+class Play:
+    """One player's action, resolved."""
+    did: str
+    handle: str
+    coord: str
+    result: str
+    points: int = 0
+
+
+def mine_budget_for(tier: int) -> int:
+    """Detonations a board absorbs before it fails.
+
+    Measured at five players: tier + 1 loses about a fifth of boards on every
+    rung, which is the right weight when being knocked out yourself is the
+    main event. Tier + 2 leaves boards clearing 93-98%, at which point the
+    collective stake stops meaning anything.
+    """
+    return tier + config.MINE_BUDGET_BASE if config.KNOCKOUT else 0
+
+
+def tier_multiplier(state: game.GameState | None) -> int:
+    """What a cell is worth on this board: tier 1 pays 1x, tier 3 pays 3x.
+
+    Higher tiers are longer and likelier to end in a bang, so the reward has
+    to rise with the stakes or the ladder is all cost. Scaling the points
+    rather than handing out more cells per turn matters: the extra reward is
+    spread over MORE turns, because harder boards run longer, instead of
+    being concentrated into fewer.
+    """
+    return tier_of(state) + 1
+
+
+def participation_of(previous: game.GameState, crowd_moves: int | None) -> float:
+    if crowd_moves is None:
+        crowd_moves = sum(1 for move in db.get_moves(previous.game_id, limit=1000)
+                          if move["source"] == "crowd")
+    return crowd_moves / previous.turn_number if previous.turn_number else 0.0
+
+
+def next_tier(previous: game.GameState | None,
+              crowd_moves: int | None = None) -> int:
+    """The rung the next board sits on.
+
+    Promotion needs a win *and* real participation, so the board only gets
+    harder when the crowd is actually driving it. Demotion needs only poor
+    participation: losing a hard board is the game working, but a board the
+    bot had to play itself is one nobody is playing.
+    """
+    if previous is None or not config.ADAPTIVE_BOARD:
+        return 0
+    current = tier_of(previous)
+    share = participation_of(previous, crowd_moves)
+    if (previous.status == game.CLEARED
+            and share >= config.GROW_PARTICIPATION):
+        return min(current + 1, len(config.TIERS) - 1)
+    if share < config.SHRINK_PARTICIPATION:
+        return max(current - 1, 0)
+    return current
+
+
+def next_board_settings(previous: game.GameState | None,
+                        crowd_moves: int | None = None) -> tuple:
+    """(rows, cols, mines) for the next game."""
+    if not config.ADAPTIVE_BOARD or not config.TIERS:
+        return config.ROWS, config.COLS, config.MINES
+    return config.TIERS[next_tier(previous, crowd_moves)]
+
+
 def _restart_phrase() -> str:
     minutes = config.RESTART_DELAY_SECONDS // 60
     if minutes >= 120:
@@ -284,6 +446,116 @@ def _crowd_decides(vote) -> bool:
     """Whether the crowd's pick is played rather than the bot's own move."""
     return (vote.votes >= config.QUORUM
             or vote.total_voters <= config.QUORUM)
+
+
+def apply_knockout_moves(state: game.GameState, replies: list,
+                        already_open: set, position, analysis) -> tuple:
+    """Open one cell for every eligible player. Returns (plays, source).
+
+    Order is by reply time, so the earliest replier acts first. A cell that
+    somebody else's cascade already opened is skipped without penalty — being
+    beaten to a square is not a wasted turn. Knocked-out players are excluded
+    here, but they can still flag, which costs no turn and carries no risk.
+    """
+    excluded = db.eliminated(state.game_id)
+    pending = votes.moves(replies, already_open, state.rows, state.cols,
+                          excluded)
+    state.turn_number += 1
+
+    plays = []
+    for move in pending:
+        try:
+            index = game.coord_to_index(move.coord)
+        except ValueError:
+            continue
+        before = len(state.revealed)
+        outcome = game.reveal(state, *index)
+        if outcome == game.ALREADY:
+            continue
+        if outcome == game.MINE:
+            try:
+                db.eliminate(state.game_id, move.did, move.handle,
+                             move.coord, state.turn_number)
+            except Exception:
+                logger.exception("Failed to record an elimination")
+            plays.append(Play(move.did, move.handle, move.coord, outcome))
+            logger.info("Turn %d: %s hit %s and is out (%d spare(s) left)",
+                        state.turn_number, move.handle, move.coord,
+                        state.spares_left)
+        else:
+            plays.append(Play(move.did, move.handle, move.coord, outcome,
+                              (len(state.revealed) - before)
+                              * tier_multiplier(state)))
+        if state.status != game.ACTIVE:
+            break
+
+    if plays:
+        return plays, "crowd"
+
+    # Nobody eligible moved, so the board would otherwise freeze.
+    cell, reason = solver.safest_move(position, analysis)
+    coord = game.index_to_coord(*cell)
+    before = len(state.revealed)
+    outcome = game.reveal(state, *cell)
+    logger.info("Turn %d by bot (%s): %s", state.turn_number, reason, coord)
+    return [Play("", "", coord, outcome,
+                 (len(state.revealed) - before) * tier_multiplier(state))], "bot"
+
+
+def build_knockout_turn_text(state: game.GameState, plays: list,
+                             flags=()) -> str:
+    """The board post for a knockout turn."""
+    opened = sum(p.points for p in plays if p.result == game.SAFE)
+    movers = sum(1 for p in plays if p.did)
+    out = [p for p in plays if p.result == game.MINE]
+    scorers = sorted((p for p in plays if p.result == game.SAFE and p.did),
+                     key=lambda p: -p.points)
+
+    head = (f"Turn {state.turn_number} · {_plural(movers, 'player')} moved"
+            if movers else f"Turn {state.turn_number} · nobody moved, so I did")
+    lines = [head]
+    for play in out[:2]:
+        lines.append(f"💥 @{play.handle} hit {play.coord} and is out. "
+                     f"{_plural(state.spares_left, 'spare')} left.")
+    if scorers:
+        lines.append(f"🏅 @{scorers[0].handle} +{scorers[0].points}")
+
+    body = "\n".join(lines)
+    ask = _knockout_ask_line(state, flags,
+                             _should_teach_flagging(state, flags))
+    while len(f"{body}\n\n{ask}") > bluesky.POST_LIMIT and len(lines) > 1:
+        lines.pop()
+        body = "\n".join(lines)
+    return _with_tags(f"{body}\n\n{ask}")
+
+
+def build_knockout_gameover_text(state: game.GameState, record: dict,
+                                 survivors: int, entrants: int,
+                                 mvp_line: str, next_board_at) -> str:
+    tier = tier_of(state) + 1
+    if state.status == game.CLEARED:
+        head = (f"🎉 BOARD SWEPT in {_plural(state.turn_number, 'turn')} — "
+                f"Tier {tier}.\n"
+                f"{_plural(state.detonations, 'mine')} found the hard way, "
+                f"{survivors} of {entrants} still standing.")
+    else:
+        head = (f"💥 BOARD LOST — {state.exploded_cell} was one mine too many "
+                f"on Tier {tier}.\n"
+                f"Cleared {len(state.revealed)} of {state.total_safe} cells; "
+                f"{survivors} of {entrants} still standing.")
+
+    next_phrase = (next_board_at.astimezone().strftime("%a %-I:%M %p %Z")
+                   if next_board_at else f"in {_restart_phrase()}")
+    required = (f"All time: {record['cleared']} cleared, "
+                f"{record['exploded']} lost.\n"
+                f"Next board: {next_phrase}. Follow to catch the opening.")
+
+    kept = []
+    for line in filter(None, [mvp_line]):
+        body = f"{head}\n" + "\n".join(kept + [line, required])
+        if len(body) <= bluesky.POST_LIMIT:
+            kept.append(line)
+    return _with_tags(f"{head}\n" + "\n".join(kept + [required]))
 
 
 def _record_flags(state: game.GameState, claimed: dict, withdrawn: dict) -> None:
@@ -404,6 +676,11 @@ def _game_tick() -> None:
                                              state.rows, state.cols)
     _record_flags(state, claimed, withdrawn)
 
+    if config.KNOCKOUT:
+        _play_knockout_turn(state, replies, already_open, position, analysis,
+                            first_flag_of_the_board, claimed)
+        return
+
     # 2. Decide. The quorum exists to stop one stray vote carrying a turn when
     #    a real crowd has scattered — but it must never silence a small one.
     #    With no more voters than the quorum itself there is nothing to split,
@@ -438,7 +715,8 @@ def _game_tick() -> None:
         return
     # A move scores the cells it opened — a blank that cascades is worth
     # more than a single numbered cell, and a mine scores nothing.
-    points = len(state.revealed) - len(revealed_before)
+    points = ((len(state.revealed) - len(revealed_before))
+              * tier_multiplier(state))
     caller_did = vote.caller.did if (vote and source == "crowd" and vote.caller) else ""
 
     state.last_coord = coord
@@ -462,6 +740,11 @@ def _game_tick() -> None:
     finished = state.status != game.ACTIVE
     record = db.get_record()
     if finished:
+        # The history row is deliberately written only after the post
+        # succeeds, so include this pending result in the public all-time stat.
+        record = dict(record)
+        record[state.status] += 1
+        record["played"] += 1
         # This turn's move is not in the table yet — it is recorded after the
         # post goes out — so count it here or the crowd loses credit for the
         # move that ended the board.
@@ -471,9 +754,15 @@ def _game_tick() -> None:
         # is the moment a flag stops being an opinion.
         _resolve_flags(state, coord, result, revealed_before, final=True)
         flag_line = build_flag_line(db.flag_scores(state.game_id))
+        next_board_at = datetime.now().astimezone() + timedelta(
+            seconds=config.RESTART_DELAY_SECONDS)
+        leaders = leaders_with_pending_move(
+            db.leaderboard(state.game_id), caller_did, state.last_caller, points)
         text = build_gameover_text(state, coord, vote, source,
                                    safe_alternative if result == game.MINE else "",
-                                   record, crowd_moves, flag_line)
+                                   record, crowd_moves, flag_line,
+                                   build_mvp_line(leaders),
+                                   next_board_at)
         kind = "gameover"
     else:
         text = build_turn_text(state, coord, vote, source, flags)
@@ -546,6 +835,93 @@ def _game_tick() -> None:
         logger.info("Next board scheduled for %s", run_date)
 
 
+def _play_knockout_turn(state: game.GameState, replies: list,
+                        already_open: set, position, analysis,
+                        first_flag_of_the_board: bool, claimed: dict) -> None:
+    """One knockout turn: everybody eligible opens a cell of their own.
+
+    Same ordering discipline as the plurality path — the move is applied in
+    memory, the post goes out, and only then is anything saved, so a network
+    blip replays the turn instead of losing it.
+    """
+    revealed_before = set(state.revealed)
+    entrants_before = db.player_count(state.game_id)
+    plays, source = apply_knockout_moves(state, replies, already_open,
+                                         position, analysis)
+
+    last = plays[-1]
+    state.last_coord = last.coord
+    state.last_result = last.result
+    state.last_source = source
+    state.last_caller = last.handle
+    state.last_votes = 0
+    state.last_voters = sum(1 for p in plays if p.did)
+
+    flags = {c for c in db.flagged_coords(state.game_id, config.FLAG_QUORUM)
+             if not state.coord_is_revealed(c)}
+    finished = state.status != game.ACTIVE
+    record = db.get_record()
+
+    extra = {p.handle: p.did for p in plays if p.did and p.handle}
+    if finished:
+        record = dict(record)
+        record[state.status] += 1
+        record["played"] += 1
+        _resolve_flags(state, last.coord, last.result, revealed_before,
+                       final=True)
+        eliminated = db.eliminated(state.game_id)
+        entrants = max(entrants_before, len(eliminated),
+                       db.player_count(state.game_id))
+        leaders = leaders_with_pending_move(
+            db.leaderboard(state.game_id), "", "", 0)
+        for play in plays:
+            leaders = leaders_with_pending_move(leaders, play.did, play.handle,
+                                                play.points)
+        text = build_knockout_gameover_text(
+            state, record, max(0, entrants - len(eliminated)), entrants,
+            build_mvp_line(leaders),
+            datetime.now().astimezone()
+            + timedelta(seconds=config.RESTART_DELAY_SECONDS))
+        kind = "gameover"
+    else:
+        text = build_knockout_turn_text(state, plays, flags)
+        kind = "turn"
+
+    try:
+        uri = _post_board(state, text, kind, extra_dids=extra, flags=flags)
+    except Exception:
+        logger.exception("Posting failed; turn not saved and will be replayed")
+        return
+    state.last_post_uri = uri
+
+    for play in plays:
+        try:
+            db.record_move(state, play.coord, play.result, source,
+                           caller=play.handle, did=play.did,
+                           points=play.points,
+                           was_provably_safe=(
+                               game.coord_to_index(play.coord) in analysis.safe))
+        except Exception:
+            logger.exception("Failed to record move %s", play.coord)
+
+    if not finished:
+        _resolve_flags(state, last.coord, last.result, revealed_before)
+    if first_flag_of_the_board and claimed:
+        _confirm_first_flag(state, claimed)
+
+    db.save_state(state)
+
+    if finished:
+        db.record_finished(state)
+        logger.info("Board %d %s on turn %d (%d of %d cells, %d detonations)",
+                    state.game_id, state.status, state.turn_number,
+                    len(state.revealed), state.total_safe, state.detonations)
+        run_date = datetime.now() + timedelta(seconds=config.RESTART_DELAY_SECONDS)
+        scheduler.add_job(start_new_game, "date", run_date=run_date,
+                          id=f"restart_{state.game_id}", replace_existing=True)
+        logger.info("Next board scheduled for %s", run_date)
+
+
 def start_new_game() -> None:
     try:
         _start_new_game()
@@ -556,8 +932,9 @@ def start_new_game() -> None:
 def _start_new_game() -> None:
     previous = db.load_state()
     game_id = (previous.game_id + 1) if previous else 1
-    state = game.new_game(game_id, rows=config.ROWS, cols=config.COLS,
-                          mines=config.MINES)
+    rows, cols, mines = next_board_settings(previous)
+    state = game.new_game(game_id, rows=rows, cols=cols, mines=mines,
+                          mine_budget=mine_budget_for(next_tier(previous)))
     logger.info("Starting board %d (%dx%d, %d mines), opened at %s",
                 game_id, state.rows, state.cols, state.mine_count,
                 state.last_coord)
