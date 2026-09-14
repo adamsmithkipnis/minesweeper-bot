@@ -155,12 +155,22 @@ def _should_teach_flagging(state: game.GameState, flags) -> bool:
     return state.turn_number % 3 == 0
 
 
+def _explained(why: str) -> str:
+    return f"🧠 {why}"
+
+
 def build_turn_text(state: game.GameState, coord: str, vote, source: str,
-                    flags=()) -> str:
-    return _with_tags(
-        f"Turn {state.turn_number} · {coord} {_outcome_phrase(state, coord)}\n"
-        f"{_credit_line(vote, source)}\n\n"
-        f"{_ask_line(state, flags, _should_teach_flagging(state, flags))}")
+                    flags=(), why: str = "") -> str:
+    """The board post for a voting turn. `why` is the bot's deduction when it
+    played the cell itself; it is shown only while the prompt still fits."""
+    ask = _ask_line(state, flags, _should_teach_flagging(state, flags))
+    lines = [f"Turn {state.turn_number} · {coord} {_outcome_phrase(state, coord)}",
+             _credit_line(vote, source)]
+    if source == "bot" and why:
+        with_why = lines + [_explained(why)]
+        if len("\n".join(with_why) + f"\n\n{ask}") <= bluesky.POST_LIMIT:
+            lines = with_why
+    return _with_tags("\n".join(lines) + f"\n\n{ask}")
 
 
 def build_opening_text(state: game.GameState, record: dict) -> str:
@@ -393,6 +403,7 @@ class Play:
     result: str
     points: int = 0
     note: str = ""          # why the bot chose this, when the bot chose it
+    why: str = ""           # the deduction behind it, for the reader
     reply_uri: str = ""     # the reply that asked for it, so we can answer it
     reply_cid: str = ""
     root_uri: str = ""
@@ -434,17 +445,23 @@ def next_tier(previous: game.GameState | None,
     """The rung the next board sits on.
 
     Promotion needs a win *and* real participation, so the board only gets
-    harder when the crowd is actually driving it. Demotion needs only poor
-    participation: losing a hard board is the game working, but a board the
-    bot had to play itself is one nobody is playing.
+    harder when the crowd is actually driving it. Demotion needs a loss *and*
+    poor participation: losing a hard board is the game working, but a board
+    the bot had to play itself is one nobody is playing.
+
+    A sweep never demotes. The bot fills every turn nobody takes, so on a
+    quiet board it plays most of them — the first Tier 2 board was swept in
+    46 turns at 42% participation and the next board opened at Tier 1, which
+    sent the players who cleared it back down for clearing it.
     """
     if previous is None or not config.ADAPTIVE_BOARD:
         return 0
     current = tier_of(previous)
     share = participation_of(previous, crowd_moves)
-    if (previous.status == game.CLEARED
-            and share >= config.GROW_PARTICIPATION):
-        return min(current + 1, len(config.TIERS) - 1)
+    if previous.status == game.CLEARED:
+        if share >= config.GROW_PARTICIPATION:
+            return min(current + 1, len(config.TIERS) - 1)
+        return current
     if share < config.SHRINK_PARTICIPATION:
         return max(current - 1, 0)
     return current
@@ -559,7 +576,8 @@ def apply_knockout_moves(state: game.GameState, replies: list,
     logger.info("Turn %d by bot (%s): %s", state.turn_number, reason, coord)
     return [Play("", "", coord, outcome,
                  (len(state.revealed) - before) * tier_multiplier(state),
-                 note=reason)], "bot"
+                 note=reason,
+                 why=solver.explain(position, cell, analysis))], "bot"
 
 
 def build_knockout_turn_text(state: game.GameState, plays: list,
@@ -587,6 +605,12 @@ def build_knockout_turn_text(state: game.GameState, plays: list,
                     f"{plays[0].coord}." if plays else
                     f"Turn {state.turn_number} · nobody moved")
     lines = [head]
+    # A quiet board is mostly the bot's own turns, so this post is what most
+    # readers see. Show the deduction: it is the one thing that teaches the
+    # game to somebody scrolling past. Added like the scorer line below —
+    # only while the prompt still fits.
+    if not movers and plays and plays[0].why:
+        lines.append(_explained(plays[0].why))
     for play in out[:2]:
         lines.append(f"💥 @{play.handle} hit {play.coord} and is out. "
                      f"{_plural(state.spares_left, 'spare')} left.")
@@ -597,6 +621,8 @@ def build_knockout_turn_text(state: game.GameState, plays: list,
     ask = _knockout_ask_line(state, flags,
                              _should_teach_flagging(state, flags))
     room = bluesky.POST_LIMIT - len(ask) - 2
+    if len("\n".join(lines)) > room:
+        lines = [head]
 
     # Everyone who opened something, best first — not just the top scorer.
     # Names are added one at a time so a crowded turn keeps as many as fit and
@@ -805,6 +831,7 @@ def _game_tick() -> None:
     #    With no more voters than the quorum itself there is nothing to split,
     #    so whoever turned up decides. Applied strictly, a lone player would
     #    watch the bot play 100% of the turns, which is not a crowd game.
+    why = ""
     if vote is not None and _crowd_decides(vote):
         coord, source = vote.coord, "crowd"
         logger.info("Turn %d by crowd: %s (%d of %d votes, called by %s)",
@@ -813,6 +840,7 @@ def _game_tick() -> None:
     else:
         cell, reason = solver.safest_move(position, analysis)
         coord, source = game.index_to_coord(*cell), "bot"
+        why = solver.explain(position, cell, analysis)
         logger.info("Turn %d by bot (%s): %s%s", state.turn_number + 1, reason,
                     coord,
                     f" — best crowd cell had {vote.votes} vote(s)" if vote else
@@ -884,7 +912,7 @@ def _game_tick() -> None:
                                    next_board_at)
         kind = "gameover"
     else:
-        text = build_turn_text(state, coord, vote, source, flags)
+        text = build_turn_text(state, coord, vote, source, flags, why)
         kind = "turn"
 
     try:

@@ -72,9 +72,18 @@ class Tiers(unittest.TestCase):
         lost = self.board(2, status=game.EXPLODED)
         self.assertEqual(main.next_board_settings(lost, 8), config.TIERS[2])
 
-    def test_a_board_nobody_played_demotes(self):
-        self.assertEqual(main.next_board_settings(self.board(2), 3),
-                         config.TIERS[1])
+    def test_a_lost_board_nobody_played_demotes(self):
+        lost = self.board(2, status=game.EXPLODED)
+        self.assertEqual(main.next_board_settings(lost, 3), config.TIERS[1])
+
+    def test_a_sweep_never_demotes(self):
+        """The bot plays every turn nobody takes, so a quiet board can be
+        swept at well under the demotion line. Sending the people who
+        cleared it down a rung for clearing it is the opposite of a reward:
+        it happened to the first Tier 2 board, 46 turns at 42%."""
+        for crowd in (0, 3, 4):
+            self.assertEqual(main.next_board_settings(self.board(2), crowd),
+                             config.TIERS[2])
 
     def test_the_ladder_is_bounded_at_both_ends(self):
         top = self.board(len(config.TIERS) - 1)
