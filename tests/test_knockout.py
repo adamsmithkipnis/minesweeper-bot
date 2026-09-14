@@ -12,7 +12,7 @@ import random
 import tempfile
 import unittest
 
-from helpers import config, db, game, main, votes
+from helpers import config, db, game, main, solver, votes
 
 try:
     import renderer
@@ -341,3 +341,72 @@ class EveryMoverIsAcknowledged(unittest.TestCase):
             (main.bluesky.post_reply, main.db.player_points,
              main._remember) = real_reply, real_points, real_remember
         self.assertEqual(len(sent), 3)
+
+
+class QuietTurnsTeach(unittest.TestCase):
+    """A turn nobody took shows the deduction, not just the cell.
+
+    Live, 83 of 135 turns in the first three days were the bot's own —
+    "nobody moved, so I opened D4" was most of the feed and taught nothing.
+    """
+
+    def setUp(self):
+        self._knockout, self._db = config.KNOCKOUT, config.DB_PATH
+        config.KNOCKOUT = True
+        config.DB_PATH = os.path.join(tempfile.mkdtemp(), "quiet.db")
+        db.init_db()
+        self.state = game.new_game(1, rng=random.Random(5), mine_budget=2)
+        self.state.turn_number = 9
+
+    def tearDown(self):
+        config.KNOCKOUT, config.DB_PATH = self._knockout, self._db
+
+    def bot(self, why, note="provably safe"):
+        return [main.Play("", "", "D4", game.SAFE, 3, note=note, why=why)]
+
+    def test_the_reason_is_shown(self):
+        why = "The 1 at C3 already has its mine at B2, so D4 is clear."
+        text = main.build_knockout_turn_text(self.state, self.bot(why))
+        self.assertIn("nobody moved, so I opened D4.", text)
+        self.assertIn("🧠 " + why, text)
+        self.assertLessEqual(len(text), 300)
+
+    def test_a_gamble_is_reported_as_odds_not_reasoning(self):
+        text = main.build_knockout_turn_text(
+            self.state, self.bot("", note="safest guess at 78%"))
+        self.assertIn("gambled on D4 at 78%", text)
+        self.assertNotIn("🧠", text)
+
+    def test_the_prompt_outranks_the_reason(self):
+        text = main.build_knockout_turn_text(self.state, self.bot("x " * 200))
+        self.assertLessEqual(len(text), 300)
+        self.assertIn("min.", text)
+        self.assertNotIn("🧠", text)
+
+    def test_a_player_turn_never_carries_it(self):
+        plays = [main.Play("did:a", "a.bsky.social", "D4", game.SAFE, 3,
+                           why="should not appear")]
+        self.assertNotIn("🧠", main.build_knockout_turn_text(self.state, plays))
+
+    def test_the_bot_move_carries_a_reason(self):
+        """apply_knockout_moves fills in `why` from the solver, so the live
+        path — not just the builder — produces the sentence."""
+        position = solver.Position.from_state(self.state)
+        analysis = solver.analyze(position)
+        if not analysis.safe:
+            self.skipTest("this seed opens onto a guess")
+        plays, source = main.apply_knockout_moves(
+            self.state, [], set(), position, analysis)
+        self.assertEqual(source, "bot")
+        self.assertTrue(plays[0].why.endswith(f"{plays[0].coord} is clear."),
+                        plays[0].why)
+
+    def test_the_voting_mode_post_shows_it_too(self):
+        config.KNOCKOUT = False
+        why = "The 1 at C3 already has its mine at B2, so D4 is clear."
+        text = main.build_turn_text(self.state, "D4", None, "bot", why=why)
+        self.assertIn("I played it myself", text)
+        self.assertIn("🧠 " + why, text)
+        self.assertLessEqual(len(text), 300)
+        crowd = main.build_turn_text(self.state, "D4", None, "crowd", why=why)
+        self.assertNotIn("🧠", crowd)

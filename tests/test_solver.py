@@ -176,3 +176,86 @@ class Soundness(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Explanations(unittest.TestCase):
+    """The bot says *why* its cell is safe, so the sentence must be true.
+
+    Each case pins the cheapest justification, because that is the one a
+    reader can check against the board by eye.
+    """
+
+    def explain(self, state, cell):
+        position = solver.Position.from_state(state)
+        return solver.explain(position, cell, solver.analyze(position))
+
+    def test_a_satisfied_number_is_named_with_its_mine(self):
+        # Mine at A1; B2 reads 1 and A1 is its only possible mine, so A2 is
+        # clear because the 1 at B2 is already spoken for.
+        state = make(3, 3, mines=[(0, 0)],
+                     revealed=[(1, 0), (1, 1), (1, 2), (2, 0), (2, 1),
+                               (2, 2), (0, 2)])
+        why = self.explain(state, (0, 1))
+        self.assertIn("already has its mine at A1", why)
+        self.assertIn("A2 is clear", why)
+        self.assertRegex(why, r"The 1 at (A3|B1|B2)")
+
+    def test_a_number_with_several_mines_lists_them(self):
+        # Mines in all four corners of a 3x3 with A2 the only other hidden
+        # cell: every number next to A2 is a 2 or the 4, so the cheapest
+        # justification has two mines to list.
+        state = make(3, 3, mines=[(0, 0), (0, 2), (2, 0), (2, 2)],
+                     revealed=[(1, 0), (1, 1), (1, 2), (2, 1)])
+        why = self.explain(state, (0, 1))
+        self.assertRegex(why, r"The 2 at (B1|B3) already has all 2 of its "
+                              r"mines \((A1 and C1|A3 and C3)\), so A2 is clear")
+
+    def test_the_subset_rule_names_both_numbers(self):
+        # 1-1 pattern along a wall. B1 sees {A1, A2}: 1 and B2 sees
+        # {A1, A2, A3}: 1, so A3 is clear — but which of A1/A2 holds the
+        # mine stays open, and B3's mine could be A4 or B4, so no number
+        # beside A3 is satisfied and only the pair of numbers explains it.
+        state = make(2, 5, mines=[(0, 0), (0, 3)],
+                     revealed=[(1, 0), (1, 1), (1, 2)])
+        why = self.explain(state, (0, 2))
+        self.assertEqual(why, "The 1 at B2 gets every mine it still needs "
+                              "from the cells it shares with the 1 at B1, "
+                              "so A3 is clear.")
+
+    def test_enumeration_gets_the_honest_catch_all(self):
+        # Only the global count frees A4: one mine, pinned to A1 or A3.
+        state = make(1, 4, mines=[(0, 0)], revealed=[(0, 1)])
+        why = self.explain(state, (0, 3))
+        self.assertIn("Every way the remaining mines can fit", why)
+        self.assertIn("A4 clear", why)
+
+    def test_a_guess_has_no_explanation(self):
+        state = make(1, 3, mines=[(0, 0)], revealed=[(0, 1)])
+        self.assertEqual(self.explain(state, (0, 0)), "")
+
+    def test_the_named_number_really_is_satisfied(self):
+        """Across random boards, whenever the sentence names a number and its
+        mines, that number must sit next to exactly those mines."""
+        import re
+        checked = 0
+        for seed in range(200):
+            state = game.new_game(1, rng=random.Random(seed))
+            position = solver.Position.from_state(state)
+            analysis = solver.analyze(position)
+            for cell in sorted(analysis.safe)[:3]:
+                why = solver.explain(position, cell, analysis)
+                m = re.match(r"The (\d) at (\w\d+) already has (?:its mine at|"
+                             r"all \d of its mines \()(.+?)\)?, so", why)
+                if not m:
+                    continue
+                number, at = int(m.group(1)), game.coord_to_index(m.group(2))
+                named = {game.coord_to_index(c.strip())
+                         for c in m.group(3).replace(" and ", ", ").split(",")}
+                self.assertEqual(state.revealed[at], number)
+                self.assertEqual(len(named), number)
+                for mine in named:
+                    self.assertIn(mine, state.mine_cells)
+                    self.assertIn(mine, set(game.neighbors(
+                        at[0], at[1], state.rows, state.cols)))
+                checked += 1
+        self.assertGreater(checked, 50)

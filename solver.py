@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from itertools import combinations
 from math import comb
 
-from game import neighbors
+from game import index_to_coord, neighbors
 
 # Enumeration is exponential in the worst case, but constraint pruning keeps
 # it far cheaper than that in practice: measured on real positions, a 30-cell
@@ -496,3 +496,88 @@ def safest_move(position: Position, analysis: Analysis | None = None) -> tuple:
 
     # No constraints at all (a board that is nothing but zeros so far).
     return min(sorted(hidden), key=hidden_touch), "no information yet"
+
+
+# ---------------------------------------------------------------------------
+# Explaining a move
+# ---------------------------------------------------------------------------
+
+def _named_constraints(position: Position, known: set) -> list:
+    """(origin, number, open cells, mines still needed), one per number.
+
+    Like `constraints()` but keeps the revealed cell each one came from, so a
+    deduction can be attributed to "the 2 at C3" rather than to a set.
+    """
+    out = []
+    for origin, number in position.revealed.items():
+        ns = neighbors(origin[0], origin[1], position.rows, position.cols)
+        open_cells = frozenset(n for n in ns
+                               if n not in position.revealed and n not in known)
+        if not open_cells:
+            continue
+        accounted = sum(1 for n in ns if n in known)
+        out.append((origin, number, open_cells, number - accounted))
+    return out
+
+
+def _list(cells) -> str:
+    coords = [index_to_coord(*c) for c in sorted(cells)]
+    if len(coords) <= 1:
+        return "".join(coords)
+    return ", ".join(coords[:-1]) + " and " + coords[-1]
+
+
+def explain(position: Position, cell: tuple,
+            analysis: Analysis | None = None) -> str:
+    """One sentence a reader can check, saying why `cell` is provably safe.
+
+    The bot plays every turn nobody takes, so on a quiet board most posts are
+    its own moves — and "nobody moved, so I opened D4" teaches nothing to
+    whoever scrolls past. The reasoning does. Returns "" when the move is a
+    guess: the odds are the explanation there, and safest_move reports them.
+
+    Cheapest justification first, because it is the easiest to verify by eye:
+    a number that already touches all its mines, then a pair of numbers
+    where one accounts for everything the other still needs, then the
+    catch-all for what only enumeration can show.
+    """
+    analysis = analysis or analyze(position)
+    if cell not in analysis.safe:
+        return ""
+    known = set(analysis.mines) | set(position.spent)
+    coord = index_to_coord(*cell)
+
+    # 1. A neighbouring number already has every mine it asked for.
+    best = None
+    for n in neighbors(cell[0], cell[1], position.rows, position.cols):
+        if n not in position.revealed:
+            continue
+        number = position.revealed[n]
+        mines_here = [m for m in neighbors(n[0], n[1], position.rows,
+                                            position.cols) if m in known]
+        if number and len(mines_here) == number:
+            if best is None or len(mines_here) < len(best[2]):
+                best = (n, number, mines_here)
+    if best:
+        origin, number, mines_here = best
+        at = index_to_coord(*origin)
+        if number == 1:
+            return (f"The 1 at {at} already has its mine at "
+                    f"{_list(mines_here)}, so {coord} is clear.")
+        return (f"The {number} at {at} already has all {number} of its "
+                f"mines ({_list(mines_here)}), so {coord} is clear.")
+
+    # 2. Subset rule: everything one number still needs lies inside another's
+    #    cells, so the rest of the bigger one is clear.
+    named = _named_constraints(position, known)
+    for (o_a, n_a, a, need_a) in named:
+        for (o_b, n_b, b, need_b) in named:
+            if a < b and need_a == need_b and cell in b - a:
+                return (f"The {n_b} at {index_to_coord(*o_b)} gets every mine "
+                        f"it still needs from the cells it shares with the "
+                        f"{n_a} at {index_to_coord(*o_a)}, so {coord} is "
+                        f"clear.")
+
+    # 3. Only enumeration shows it.
+    return (f"Every way the remaining mines can fit the numbers leaves "
+            f"{coord} clear.")
