@@ -99,6 +99,22 @@ CREATE TABLE IF NOT EXISTS eliminations (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_eliminated_once
     ON eliminations (game_id, did);
 
+-- Milestones already celebrated, one row per player per rung. The unique
+-- index is the whole point: it makes a public "you passed 1,000!" post
+-- impossible to send twice, however a turn is retried or replayed.
+CREATE TABLE IF NOT EXISTS milestones (
+    id INTEGER PRIMARY KEY,
+    did TEXT,
+    threshold INTEGER,
+    points INTEGER,           -- the total at the moment it was crossed
+    game_id INTEGER,
+    announced INTEGER DEFAULT 0,  -- 0 = backfilled silently, 1 = posted
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_milestones_once
+    ON milestones (did, threshold);
+
 -- Every post the bot creates, so a reset deletes exactly the bot's own posts
 -- instead of indiscriminately emptying the account.
 CREATE TABLE IF NOT EXISTS posts (
@@ -357,12 +373,21 @@ def player_points(did: str, game_id: int | None = None) -> int:
     return int(row["n"] or 0)
 
 
-def leaderboard(game_id: int | None = None, limit: int = 5) -> list:
-    """Highest scorers, best first: [{did, handle, points, moves}]."""
+def leaderboard(game_id: int | None = None, limit: int = 5,
+                since: datetime | None = None) -> list:
+    """Highest scorers, best first: [{did, handle, points, moves}].
+
+    `since` windows it by move time, which is what makes a weekly table
+    possible. created_at is written by SQLite as UTC, so the bound is
+    converted rather than passed through as local time.
+    """
     clause, params = "WHERE did IS NOT NULL AND did != ''", []
     if game_id is not None:
         clause += " AND game_id = ?"
         params.append(game_id)
+    if since is not None:
+        clause += " AND created_at >= ?"
+        params.append(_utc_text(since))
     params.append(limit)
     with _connect() as conn:
         rows = conn.execute(
@@ -371,9 +396,107 @@ def leaderboard(game_id: int | None = None, limit: int = 5) -> list:
                          ORDER BY created_at DESC LIMIT 1) AS handle,
                        SUM(points) AS points, COUNT(*) AS moves
                 FROM moves m1 {clause}
-                GROUP BY did ORDER BY points DESC, moves ASC LIMIT ?""",
+                GROUP BY did
+                HAVING SUM(points) > 0
+                ORDER BY points DESC, moves ASC LIMIT ?""",
             params).fetchall()
     return [dict(r) for r in rows]
+
+
+def _utc_text(when: datetime) -> str:
+    """A datetime as SQLite writes CURRENT_TIMESTAMP: UTC, no offset."""
+    if when.tzinfo is not None:
+        when = when.astimezone(timezone.utc)
+    return when.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def milestones_reached(did: str) -> set:
+    """Rungs this player has already been credited with."""
+    if not did:
+        return set()
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT threshold FROM milestones WHERE did = ?", (did,)).fetchall()
+    return {int(r["threshold"]) for r in rows}
+
+
+def backfill_milestones(did: str, points: int, ladder: list) -> int:
+    """Mark the rungs a player has *already* passed, without announcing them.
+
+    Called once per player, the first time they come up, so switching this
+    feature on does not congratulate a 942-point regular on their first 100.
+    Only ever applied to a player with no rows at all: once they have any, a
+    rung still missing is a post that is genuinely owed, and a restart must
+    not swallow it.
+    """
+    if not did:
+        return 0
+    with _connect() as conn:
+        seen = conn.execute("SELECT COUNT(*) n FROM milestones WHERE did = ?",
+                            (did,)).fetchone()["n"]
+        if seen:
+            return 0
+        rows = [(did, t, points) for t in ladder if t <= points]
+        conn.executemany(
+            "INSERT OR IGNORE INTO milestones (did, threshold, points, "
+            "announced) VALUES (?, ?, ?, 0)", rows)
+    return len(rows)
+
+
+def claim_milestones(did: str, points: int, ladder: list,
+                     game_id: int | None = None) -> list:
+    """Reserve every unawarded rung at or below `points`; return them.
+
+    Claiming before posting rather than after is what makes a duplicate
+    impossible: the unique index rejects the second claim even if a turn is
+    replayed. If the post then fails, `release_milestones` hands them back so
+    the next turn tries again.
+    """
+    if not did:
+        return []
+    claimed = []
+    with _connect() as conn:
+        for threshold in ladder:
+            if threshold > points:
+                break
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO milestones (did, threshold, points, "
+                "game_id, announced) VALUES (?, ?, ?, ?, 1)",
+                (did, threshold, points, game_id))
+            if cursor.rowcount:
+                claimed.append(threshold)
+    return claimed
+
+
+def release_milestones(did: str, thresholds: list) -> None:
+    """Undo claims whose post never went out."""
+    if not did or not thresholds:
+        return
+    with _connect() as conn:
+        conn.executemany("DELETE FROM milestones WHERE did = ? AND "
+                         "threshold = ? AND announced = 1",
+                         [(did, t) for t in thresholds])
+
+
+def last_post_at(kind: str) -> datetime | None:
+    """When the bot last posted something of this kind, UTC.
+
+    The weekly leaderboard needs it: APScheduler recomputes a cron job's next
+    run at startup, so a restart across the scheduled minute would otherwise
+    skip that week silently.
+    """
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT created_at FROM posts WHERE kind = ? "
+            "ORDER BY created_at DESC, rowid DESC LIMIT 1", (kind,)).fetchone()
+    if row is None or not row["created_at"]:
+        return None
+    stamp = str(row["created_at"]).replace("T", " ").split(".")[0]
+    try:
+        return datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc)
+    except ValueError:
+        return None
 
 
 def get_moves(game_id: int | None = None, limit: int = 100) -> list:
@@ -609,3 +732,6 @@ def reset_all(keep_record: bool = False) -> None:
             conn.execute("DELETE FROM moves")
             conn.execute("DELETE FROM flags")
             conn.execute("DELETE FROM eliminations")
+            # Points go with the moves, so the milestones they earned have to
+            # go too, or nobody can ever reach their first hundred again.
+            conn.execute("DELETE FROM milestones")

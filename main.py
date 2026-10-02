@@ -25,6 +25,7 @@ import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
@@ -359,6 +360,168 @@ def build_mvp_line(leaders: list) -> str:
     best = leaders[0]
     return (f"🏅 Board MVP: @{best['handle']} — "
             f"{_plural(best['points'], 'point')}.")
+
+
+# ---------------------------------------------------------------------------
+# Milestones and the weekly table
+# ---------------------------------------------------------------------------
+
+def _short(handle: str) -> str:
+    """The name people actually call each other by: the first label.
+
+    A mention facet carries the DID, not the text, so "@coil" notifies the
+    owner of coil.bsky.social exactly as the full handle would — and six full
+    handles do not fit in 300 characters while six short ones do. Callers
+    must pass both forms in `extra_dids` so either resolves.
+    """
+    return handle.split(".", 1)[0]
+
+
+def _names(rows: list) -> tuple:
+    """(display name per row, {name: did}) with collisions left long.
+
+    Two *different* players whose handles share a first label would both read
+    as the same @name, so in that case everybody in the post keeps their full
+    handle rather than one of them being quietly mislabelled. The same player
+    appearing twice — in both tables of the standings post — is not a
+    collision, which is why this counts accounts and not rows.
+    """
+    shorts = [_short(row["handle"] or "") for row in rows]
+    owners = {}
+    for row, short in zip(rows, shorts):
+        owners.setdefault(short, set()).add(row.get("did") or row["handle"])
+    unique = all(len(dids) == 1 for dids in owners.values())
+    display, dids = [], {}
+    for row, short in zip(rows, shorts):
+        handle = row["handle"] or ""
+        name = short if unique and short else handle
+        display.append(name)
+        if row.get("did"):
+            dids[handle] = row["did"]
+            dids[short] = row["did"]
+    return display, dids
+
+
+def _comma(number: int) -> str:
+    return f"{number:,}"
+
+
+def build_milestone_text(crossings: list) -> str:
+    """The post for one or more players passing a point milestone.
+
+    One post per turn however many people crossed, because two celebrations
+    in a row read as a malfunction. The rung is the headline and the running
+    total is the proof, since the two differ: you pass 1,000 by landing on
+    1,047, and saying "1,000" alone would look rounded.
+    """
+    if not crossings:
+        return ""
+    display, dids = _names(crossings)
+    if len(crossings) == 1:
+        first = crossings[0]
+        head = (f"🏆 MILESTONE — @{display[0]} just passed "
+                f"{_comma(first['threshold'])} points.")
+        lines = [head, f"{_comma(first['points'])} cells opened all time."]
+        if first.get("rank") == 1:
+            lines[-1] = (f"{_comma(first['points'])} cells opened all time, "
+                         f"top of the board.")
+        if first.get("next"):
+            lines.append(f"Next rung: {_comma(first['next'])}.")
+    else:
+        lines = ["🏆 MILESTONES"]
+        for name, crossing in zip(display, crossings):
+            lines.append(f"@{name} passed {_comma(crossing['threshold'])} "
+                         f"({_comma(crossing['points'])} all time)")
+    # Drop from the bottom — the rung and the name are the post; the rest is
+    # colour, and the tags are added only with whatever room is left.
+    while len(lines) > 1 and len("\n".join(lines)) > bluesky.POST_LIMIT - 20:
+        lines.pop()
+    return _with_tags("\n".join(lines)), dids
+
+
+def milestone_crossings(did: str, handle: str, total: int, earned: int,
+                        game_id: int | None = None) -> list:
+    """Claim and describe every rung this player has newly passed.
+
+    `total` is their all-time points after this turn and `earned` is what
+    this turn added, so the total before it is known without having to have
+    stored it. The rungs are claimed here and posted by the caller: the claim
+    is what stops the same congratulation going out twice, and the caller
+    releases it if the post fails.
+    """
+    if not did or not config.MILESTONES:
+        return []
+    ladder = list(config.MILESTONES)
+    # First sight of this player: everything already behind them is marked
+    # silently, measured before this turn so a first move that cascades past
+    # a rung is still celebrated.
+    db.backfill_milestones(did, max(0, total - earned), ladder)
+    thresholds = db.claim_milestones(did, total, ladder, game_id)
+    if not thresholds:
+        return []
+    leaders = db.leaderboard(limit=1)
+    rank = 1 if leaders and leaders[0]["did"] == did else 0
+    crossings = []
+    for threshold in thresholds:
+        later = [t for t in ladder if t > threshold]
+        crossings.append({"did": did, "handle": handle,
+                          "threshold": threshold, "points": total,
+                          "rank": rank, "next": later[0] if later else 0})
+    # Several rungs at once means a backfilled player we are meeting for the
+    # first time mid-cascade; announce the highest, which is the true news.
+    return crossings[-1:]
+
+
+def build_leaderboard_text(all_time: list, weekly: list, week_start,
+                           week_end) -> str:
+    """The Saturday standings post.
+
+    Two tables in 300 characters means the names have to be short and the
+    numbers have to be bare. The weekly table goes first: the all-time one
+    barely moves week to week, and a table nobody can enter is not a reason
+    to come back.
+    """
+    rows = list(weekly) + list(all_time)
+    display, dids = _names(rows)
+    weekly_names = display[:len(weekly)]
+    all_time_names = display[len(weekly):]
+
+    span = f"{week_start:%b %-d}–{week_end:%b %-d}"
+    head = f"🏆 WEEKLY STANDINGS · {span}"
+
+    def table(names, entries):
+        return " · ".join(f"@{name} {_comma(row['points'])}"
+                          for name, row in zip(names, entries))
+
+    lines = [head]
+    if weekly:
+        lines.append("This week: " + table(weekly_names, weekly))
+    else:
+        lines.append("Nobody scored this week — the board is open.")
+    if all_time:
+        lines.append("All time: " + table(all_time_names, all_time))
+
+    # A scoreboard is a reason to look; an invitation is a reason to play.
+    # Added before the tags and after the tables, so it takes the room a
+    # sixth hashtag would have had and loses to a name if it comes to that.
+    invite = "Reply a coordinate on the live board to make next week's table."
+
+    # Trim the tables from the bottom row up rather than dropping a whole
+    # table, so a crowded week still shows a podium of some size.
+    while len("\n".join(lines)) > bluesky.POST_LIMIT - 20:
+        if len(all_time_names) > 1:
+            all_time_names, all_time = all_time_names[:-1], all_time[:-1]
+            lines[-1] = "All time: " + table(all_time_names, all_time)
+        elif len(weekly_names) > 1:
+            weekly_names, weekly = weekly_names[:-1], weekly[:-1]
+            lines[1] = "This week: " + table(weekly_names, weekly)
+        elif len(lines) > 2:
+            lines.pop()
+        else:
+            break
+    if len("\n".join(lines + [invite])) <= bluesky.POST_LIMIT - 13:
+        lines.append(invite)
+    return _with_tags("\n".join(lines)), dids
 
 
 def leaders_with_pending_move(leaders: list, did: str, handle: str,
@@ -749,6 +912,44 @@ def _credit_knockout_players(state: game.GameState, plays: list) -> None:
             logger.exception("Failed to credit %s", play.handle)
 
 
+def _announce_milestones(state: game.GameState, movers: list) -> None:
+    """One celebration post for everybody who passed a rung this turn.
+
+    Called after the moves are recorded, so the totals it quotes match the
+    ones the players were just told in their own replies. Like every other
+    extra post, a failure here must not touch a turn that has already gone
+    out — and a claim whose post failed is handed back so the next turn can
+    try again.
+    """
+    crossings = []
+    for did, handle, earned in movers:
+        if not did or earned <= 0:
+            continue
+        try:
+            crossings.extend(milestone_crossings(
+                did, handle, db.player_points(did), earned, state.game_id))
+        except Exception:
+            logger.exception("Failed to check milestones for %s", handle)
+    if not crossings:
+        return
+
+    text, dids = build_milestone_text(crossings)
+    try:
+        uri = bluesky.post_text(text, kind="milestone", extra_dids=dids)
+        _remember(uri, "milestone", state.game_id, state.turn_number)
+        for crossing in crossings:
+            logger.info("Milestone: %s passed %d (%d all time)",
+                        crossing["handle"], crossing["threshold"],
+                        crossing["points"])
+    except Exception:
+        logger.exception("Failed to post a milestone; releasing the claims")
+        for crossing in crossings:
+            try:
+                db.release_milestones(crossing["did"], [crossing["threshold"]])
+            except Exception:
+                logger.exception("Failed to release a milestone claim")
+
+
 def _confirm_first_flag(state: game.GameState, claimed: dict) -> None:
     """Answer the first person to flag anything on this board.
 
@@ -969,6 +1170,10 @@ def _game_tick() -> None:
                            did=caller_did, points=points)
         except Exception:
             logger.exception("Failed to record move on retry")
+
+    # Announced last of the extras, so the total it quotes is the one the
+    # recorded move produced rather than one this turn has yet to save.
+    _announce_milestones(state, [(caller_did, state.last_caller, points)])
     db.save_state(state)
 
     if finished:
@@ -1052,6 +1257,7 @@ def _play_knockout_turn(state: game.GameState, replies: list,
             logger.exception("Failed to record move %s", play.coord)
 
     _credit_knockout_players(state, plays)
+    _announce_milestones(state, [(p.did, p.handle, p.points) for p in plays])
 
     if not finished:
         _resolve_flags(state, last.coord, last.result, revealed_before)
@@ -1149,6 +1355,84 @@ def setup_logging() -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# The weekly standings post
+# ---------------------------------------------------------------------------
+
+_DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+
+def _leaderboard_tz():
+    try:
+        return ZoneInfo(config.LEADERBOARD_TZ)
+    except Exception:
+        logger.warning("Unknown LEADERBOARD_TZ %r; using local time",
+                       config.LEADERBOARD_TZ)
+        return datetime.now().astimezone().tzinfo
+
+
+def previous_slot(now: datetime) -> datetime:
+    """The most recent scheduled posting time at or before `now`.
+
+    Computed in the configured zone so the slot keeps its wall-clock hour
+    across a daylight-saving change, and returned as an aware datetime.
+    """
+    tz = _leaderboard_tz()
+    local = now.astimezone(tz)
+    try:
+        wanted = _DAYS.index(config.LEADERBOARD_DAY.strip().lower()[:3])
+    except ValueError:
+        wanted = 5
+    slot = local.replace(hour=config.LEADERBOARD_HOUR, minute=0, second=0,
+                         microsecond=0)
+    slot -= timedelta(days=(local.weekday() - wanted) % 7)
+    if slot > local:
+        slot -= timedelta(days=7)
+    return slot
+
+
+def leaderboard_due(now: datetime | None = None) -> bool:
+    """Whether this week's post is owed.
+
+    APScheduler recomputes a cron job's next run when the process starts, so
+    a deploy that restarts the bot across the scheduled minute would skip the
+    week in silence. The first one ever waits for its real slot rather than
+    firing the moment this ships.
+    """
+    if not config.WEEKLY_LEADERBOARD:
+        return False
+    now = now or datetime.now(timezone.utc)
+    last = db.last_post_at("leaderboard")
+    if last is None:
+        return False
+    return last < previous_slot(now)
+
+
+def weekly_leaderboard(now: datetime | None = None) -> str:
+    """Post the standings: top of the week, and top of all time."""
+    now = (now or datetime.now(timezone.utc)).astimezone(_leaderboard_tz())
+    start = now - timedelta(days=7)
+    top = max(1, config.LEADERBOARD_TOP)
+    weekly = db.leaderboard(limit=top, since=start)
+    all_time = db.leaderboard(limit=top)
+    if not weekly and not all_time:
+        logger.info("No scores yet; skipping the weekly standings")
+        return ""
+    text, dids = build_leaderboard_text(all_time, weekly, start, now)
+    uri = bluesky.post_text(text, kind="leaderboard", extra_dids=dids)
+    _remember(uri, "leaderboard", None)
+    logger.info("Posted the weekly standings (%d this week, %d all time)",
+                len(weekly), len(all_time))
+    return uri
+
+
+def post_weekly_leaderboard() -> None:
+    try:
+        weekly_leaderboard()
+    except Exception:
+        logger.exception("Weekly standings post failed")
+
+
 def play_turns(count: int) -> None:
     """Run `count` turns back to back, starting a board if there isn't one.
 
@@ -1171,6 +1455,8 @@ def main() -> None:
     parser.add_argument("--play", type=int, metavar="N",
                         help="play N turns immediately and exit, instead of "
                              "starting the scheduler")
+    parser.add_argument("--leaderboard", action="store_true",
+                        help="post the weekly standings now and exit")
     args = parser.parse_args()
 
     setup_logging()
@@ -1184,6 +1470,10 @@ def main() -> None:
 
     db.init_db()
     bluesky.login_with_retry()
+
+    if args.leaderboard:
+        weekly_leaderboard()
+        return
 
     if args.play:
         play_turns(args.play)
@@ -1201,6 +1491,22 @@ def main() -> None:
                       misfire_grace_time=config.TURN_MINUTES * 60)
     logger.info("Scheduler started; one turn every %d minutes, next at %s",
                 config.TURN_MINUTES, first.astimezone().strftime("%H:%M:%S %Z"))
+
+    if config.WEEKLY_LEADERBOARD:
+        scheduler.add_job(post_weekly_leaderboard, "cron",
+                          day_of_week=config.LEADERBOARD_DAY,
+                          hour=config.LEADERBOARD_HOUR, minute=0,
+                          timezone=_leaderboard_tz(), id="weekly_leaderboard",
+                          coalesce=True, max_instances=1,
+                          misfire_grace_time=3600)
+        slot = previous_slot(datetime.now(timezone.utc)) + timedelta(days=7)
+        logger.info("Weekly standings every %s at %02d:00 %s, next at %s",
+                    config.LEADERBOARD_DAY, config.LEADERBOARD_HOUR,
+                    config.LEADERBOARD_TZ, slot.strftime("%Y-%m-%d %H:%M %Z"))
+        if leaderboard_due():
+            logger.info("Last week's standings were missed; posting now")
+            post_weekly_leaderboard()
+
     scheduler.start()
 
 

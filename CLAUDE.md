@@ -54,6 +54,9 @@ or in the Battleship bot:
 - `config.py` must be imported before anything reads a setting; it calls
   `load_dotenv()` at import time on purpose.
 - Do not save game state before the post succeeds.
+- A milestone rung is claimed in the database *before* its post goes out, and
+  released if the post fails. Claim-then-post is what makes congratulating
+  somebody twice impossible; post-then-record would do the opposite.
 - The dashboard shows the solver's answers. It binds to localhost. Leave it
   there.
 
@@ -64,5 +67,6 @@ launchctl list | grep minesweeper                       # is it running
 launchctl kickstart -k gui/$(id -u)/com.minesweeper.bot # restart
 tail -f minesweeper.log                                 # watch it
 .venv/bin/python main.py --play 1                       # play one turn by hand
+.venv/bin/python main.py --leaderboard                  # post the weekly table now
 .venv/bin/python reset.py --dry-run --all               # see what a wipe would do
 ```
