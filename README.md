@@ -176,6 +176,46 @@ stall the board forever.
 Claims are scored when the cell is opened, or against the real layout when the
 run ends, and the game-over post names who read the mines best on that board.
 
+### Milestones
+
+Passing a point total on the `MILESTONES` ladder — 100, 500, 1,000, 2,500,
+5,000 and up — gets a post of its own naming the player. The rungs widen
+because the distribution is steep: the top player gained 651 points in a
+week while most of the crowd is under 100, so an even ladder would either
+ignore newcomers or congratulate the regulars every other day. On the real
+history this fires about five times a week, most of them somebody's first
+hundred.
+
+Two things make it safe to run unattended. Rungs are **claimed in the
+database before the post goes out**, under a unique index, so no replay or
+retry can congratulate the same person twice; if the post then fails the
+claim is released and the next turn tries again. And the first time a player
+is seen, every rung already behind them is marked silently — switching this
+on does not tell a 942-point regular they have passed 100.
+
+### Weekly standings
+
+Saturdays at 17:00 `LEADERBOARD_TZ` (Pacific by default), the bot posts the
+top three of the week beside the top three of all time. The week goes first:
+the all-time table barely moves, and a table nobody can enter is not a reason
+to come back.
+
+Handles appear as their first label — `@coil`, not `@coil.bsky.social` —
+because a mention facet carries the DID rather than the text, so the short
+form still notifies the right account and six names fit in 300 characters
+where six full handles do not. If two players' handles share a first label,
+everybody in that post keeps their full handle instead.
+
+APScheduler recomputes a cron job's next run at startup, so a deploy that
+restarts the bot across 17:00 would skip the week in silence. `leaderboard_due`
+closes that: on startup the bot compares the last standings post against the
+most recent scheduled slot and posts a missed one late. The first one ever
+waits for its real slot rather than firing the moment this ships.
+
+```bash
+.venv/bin/python main.py --leaderboard    # post this week's table by hand
+```
+
 ### Hashtags
 
 `#Minesweeper` is on every post so the game stays findable under one name.
@@ -252,6 +292,7 @@ Everything runs headlessly, with no network and no credentials:
 .venv/bin/python tests/simulate.py --games 300            # pacing
 .venv/bin/python tests/dryrun.py                          # a full board, posts written to disk
 .venv/bin/python tests/preview.py                         # sample board images
+MILESTONES="5 20" .venv/bin/python tests/dryrun.py        # milestone posts in a real turn
 .venv/bin/python tools/tutorial_image.py                  # pinned tutorial image
 ```
 

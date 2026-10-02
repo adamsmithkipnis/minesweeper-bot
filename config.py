@@ -125,6 +125,28 @@ HASHTAG_POOL = os.environ.get(
     "#bots #botsky #bskygames #opensource #python",
 ).split()
 
+# ---------------------------------------------------------------------------
+# Celebrations
+# ---------------------------------------------------------------------------
+
+# Point totals worth a post of their own. The rungs widen on purpose: a
+# player's first hundred should be noticed, and the regulars should not
+# trigger one every other day. Measured against the real history (the top
+# player gained 651 points in a week), this ladder fires about five times a
+# week across the whole crowd, most of them somebody's first 100.
+MILESTONES = sorted(int(n) for n in os.environ.get(
+    "MILESTONES", "100 500 1000 2500 5000 10000 25000 50000").split())
+
+# The weekly standings post. Day names are APScheduler's (mon..sun) and the
+# hour is local to LEADERBOARD_TZ, so the post keeps its wall-clock slot
+# across a daylight-saving change instead of drifting an hour.
+WEEKLY_LEADERBOARD = os.environ.get("WEEKLY_LEADERBOARD", "1").lower() not in (
+    "0", "false", "no")
+LEADERBOARD_DAY = os.environ.get("LEADERBOARD_DAY", "sat")
+LEADERBOARD_HOUR = int(os.environ.get("LEADERBOARD_HOUR", "17"))
+LEADERBOARD_TZ = os.environ.get("LEADERBOARD_TZ", "America/Los_Angeles")
+LEADERBOARD_TOP = int(os.environ.get("LEADERBOARD_TOP", "3"))
+
 # The one tag that goes on replies to individual followers. Six hashtags in a
 # personal reply reads as spam; in a broadcast post it reads as reach.
 REPLY_HASHTAG = os.environ.get("REPLY_HASHTAG", "#Minesweeper")
