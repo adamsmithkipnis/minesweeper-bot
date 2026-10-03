@@ -312,6 +312,19 @@ def build_knockout_credit_reply(state: game.GameState, play,
         tags=[config.REPLY_HASHTAG])
 
 
+def build_cascade_skip_reply(state: game.GameState, move) -> str:
+    """Explain why a valid move earned nothing after an earlier cascade."""
+    if state.status == game.ACTIVE:
+        next_step = (f"Turn {state.turn_number} is now open — reply to the "
+                     f"newest board post to play.")
+    else:
+        next_step = "That move finished the board; the next board begins soon."
+    return _with_tags(
+        f"⏭️ {move.coord} was valid, but an earlier move's cascade opened it "
+        f"before yours was applied, so it earned 0 points.\n\n{next_step}",
+        tags=[config.REPLY_HASHTAG])
+
+
 def build_credit_reply(state: game.GameState, coord: str, vote,
                        points: int = 0, this_game: int = 0,
                        all_time: int = 0) -> str:
@@ -677,7 +690,12 @@ def _crowd_decides(vote) -> bool:
 
 def apply_knockout_moves(state: game.GameState, replies: list,
                         already_open: set, position, analysis) -> tuple:
-    """Open one cell for every eligible player. Returns (plays, source).
+    """Open one cell for every eligible player.
+
+    Returns ``(plays, source, superseded)``.  ``superseded`` contains valid
+    moves whose cells were opened by an earlier move's flood-fill during this
+    same turn.  They do not score, but the caller still deserves an answer
+    explaining why their move disappeared.
 
     Order is by reply time, so the earliest replier acts first. A cell that
     somebody else's cascade already opened is skipped without penalty — being
@@ -693,15 +711,18 @@ def apply_knockout_moves(state: game.GameState, replies: list,
                           excluded)
     state.turn_number += 1
 
-    plays = []
-    for move in pending:
+    plays, superseded = [], []
+    cascade_opened = set()
+    for index_in_turn, move in enumerate(pending):
         try:
             index = game.coord_to_index(move.coord)
         except ValueError:
             continue
-        before = len(state.revealed)
+        before_cells = set(state.revealed)
         outcome = game.reveal(state, *index)
         if outcome == game.ALREADY:
+            if index in cascade_opened:
+                superseded.append(move)
             continue
         if outcome == game.MINE:
             try:
@@ -718,18 +739,29 @@ def apply_knockout_moves(state: game.GameState, replies: list,
                         state.turn_number, move.handle, move.coord,
                         state.spares_left)
         else:
+            newly_opened = set(state.revealed) - before_cells
+            cascade_opened.update(newly_opened - {index})
             plays.append(Play(move.did, move.handle, move.coord, outcome,
-                              (len(state.revealed) - before)
+                              (len(state.revealed) - len(before_cells))
                               * tier_multiplier(state),
                               reply_uri=move.reply.uri,
                               reply_cid=move.reply.cid,
                               root_uri=move.reply.root_uri,
                               root_cid=move.reply.root_cid))
         if state.status != game.ACTIVE:
+            # A clearing cascade can also consume moves we have not reached
+            # yet.  Preserve those callers for the explanatory reply below.
+            for later in pending[index_in_turn + 1:]:
+                try:
+                    later_index = game.coord_to_index(later.coord)
+                except ValueError:
+                    continue
+                if later_index in cascade_opened:
+                    superseded.append(later)
             break
 
     if plays:
-        return plays, "crowd"
+        return plays, "crowd", superseded
 
     # Nobody eligible moved, so the board would otherwise freeze.
     cell, reason = solver.safest_move(position, analysis)
@@ -737,10 +769,11 @@ def apply_knockout_moves(state: game.GameState, replies: list,
     before = len(state.revealed)
     outcome = game.reveal(state, *cell)
     logger.info("Turn %d by bot (%s): %s", state.turn_number, reason, coord)
-    return [Play("", "", coord, outcome,
-                 (len(state.revealed) - before) * tier_multiplier(state),
-                 note=reason,
-                 why=solver.explain(position, cell, analysis))], "bot"
+    return ([Play("", "", coord, outcome,
+                  (len(state.revealed) - before) * tier_multiplier(state),
+                  note=reason,
+                  why=solver.explain(position, cell, analysis))],
+            "bot", superseded)
 
 
 def build_knockout_turn_text(state: game.GameState, plays: list,
@@ -910,6 +943,29 @@ def _credit_knockout_players(state: game.GameState, plays: list) -> None:
             _remember(uri, "credit", state.game_id, state.turn_number)
         except Exception:
             logger.exception("Failed to credit %s", play.handle)
+
+
+def _notify_cascade_skips(state: game.GameState, moves: list) -> None:
+    """Answer valid callers whose cells an earlier move flood-opened.
+
+    The new turn post has already succeeded before this runs, so it is safe
+    to tell the player that another turn is open.  Like score replies, these
+    notices are best-effort and cannot roll back the turn.
+    """
+    for move in moves:
+        reply = move.reply
+        if not move.did or not reply.uri:
+            continue
+        try:
+            uri = bluesky.post_reply(
+                build_cascade_skip_reply(state, move),
+                parent_uri=reply.uri, parent_cid=reply.cid,
+                root_uri=reply.root_uri, root_cid=reply.root_cid,
+                kind="cascade")
+            _remember(uri, "cascade", state.game_id, state.turn_number)
+        except Exception:
+            logger.exception("Failed to explain cascade skip to %s",
+                             move.handle)
 
 
 def _announce_milestones(state: game.GameState, movers: list) -> None:
@@ -1198,8 +1254,8 @@ def _play_knockout_turn(state: game.GameState, replies: list,
     """
     revealed_before = set(state.revealed)
     entrants_before = db.player_count(state.game_id)
-    plays, source = apply_knockout_moves(state, replies, already_open,
-                                         position, analysis)
+    plays, source, superseded = apply_knockout_moves(
+        state, replies, already_open, position, analysis)
 
     last = plays[-1]
     state.last_coord = last.coord
@@ -1257,6 +1313,7 @@ def _play_knockout_turn(state: game.GameState, replies: list,
             logger.exception("Failed to record move %s", play.coord)
 
     _credit_knockout_players(state, plays)
+    _notify_cascade_skips(state, superseded)
     _announce_milestones(state, [(p.did, p.handle, p.points) for p in plays])
 
     if not finished:
