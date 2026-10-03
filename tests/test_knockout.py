@@ -7,6 +7,7 @@ turns, and it gets *worse* as the audience grows. Making a mine cost the
 player instead of the board inverts that: eight players clear 98%.
 """
 
+import copy
 import os
 import random
 import tempfile
@@ -99,6 +100,100 @@ class Moves(unittest.TestCase):
         """Elimination is a change of role, not an exit."""
         flags, _ = votes.collect_flags([reply("a", "flag C3")], set(), 9, 9)
         self.assertEqual(sorted(flags), ["C3"])
+
+
+@unittest.skipUnless(HAS_PILLOW, "Pillow not installed (use .venv/bin/python)")
+class CascadeCollisions(unittest.TestCase):
+    def setUp(self):
+        self._knockout, self._db = config.KNOCKOUT, config.DB_PATH
+        config.KNOCKOUT = True
+        config.DB_PATH = os.path.join(tempfile.mkdtemp(), "cascade.db")
+        db.init_db()
+
+    def tearDown(self):
+        config.KNOCKOUT, config.DB_PATH = self._knockout, self._db
+
+    def _cascade_pair(self, state):
+        """A hidden click and another hidden cell its flood-fill opens."""
+        hidden = [(r, c) for r in range(state.rows) for c in range(state.cols)
+                  if (r, c) not in state.revealed
+                  and (r, c) not in state.mine_cells]
+        for first in hidden:
+            candidate = copy.deepcopy(state)
+            before = set(candidate.revealed)
+            if game.reveal(candidate, *first) != game.SAFE:
+                continue
+            opened = set(candidate.revealed) - before - {first}
+            if opened:
+                return (game.index_to_coord(*first),
+                        game.index_to_coord(*sorted(opened)[0]))
+        self.fail("seed produced no hidden cascade pair")
+
+    def test_a_move_consumed_by_an_earlier_cascade_is_preserved(self):
+        state = game.new_game(1, rng=random.Random(5), mine_budget=2)
+        first, consumed = self._cascade_pair(state)
+        position = solver.Position.from_state(state)
+        analysis = solver.analyze(position)
+        already = {game.index_to_coord(r, c) for r, c in state.revealed}
+
+        plays, source, superseded = main.apply_knockout_moves(
+            state,
+            [reply("first", first, "1"), reply("second", consumed, "2")],
+            already, position, analysis)
+
+        self.assertEqual(source, "crowd")
+        self.assertEqual([p.did for p in plays], ["first"])
+        self.assertEqual([(m.did, m.coord) for m in superseded],
+                         [("second", consumed)])
+
+    def test_calling_the_same_cell_is_not_mislabeled_as_a_cascade(self):
+        state = game.new_game(1, rng=random.Random(5), mine_budget=2)
+        first, _ = self._cascade_pair(state)
+        position = solver.Position.from_state(state)
+        analysis = solver.analyze(position)
+        already = {game.index_to_coord(r, c) for r, c in state.revealed}
+
+        plays, source, superseded = main.apply_knockout_moves(
+            state,
+            [reply("first", first, "1"), reply("second", first, "2")],
+            already, position, analysis)
+
+        self.assertEqual(source, "crowd")
+        self.assertEqual([p.did for p in plays], ["first"])
+        self.assertEqual(superseded, [])
+
+    def test_the_skipped_player_is_told_why_and_where_to_play(self):
+        state = game.new_game(1, rng=random.Random(5), mine_budget=2)
+        state.turn_number = 14
+        move = votes.Move("did:a", "a.bsky.social", "E3",
+                          reply("did:a", "E3"))
+        sent = []
+        real_reply, real_remember = main.bluesky.post_reply, main._remember
+        main.bluesky.post_reply = lambda text, **kw: (
+            sent.append((text, kw)) or "at://sent/1")
+        main._remember = lambda *a, **k: None
+        try:
+            main._notify_cascade_skips(state, [move])
+        finally:
+            main.bluesky.post_reply, main._remember = real_reply, real_remember
+
+        self.assertEqual(len(sent), 1)
+        text, kwargs = sent[0]
+        self.assertIn("E3 was valid", text)
+        self.assertIn("cascade opened it", text)
+        self.assertIn("earned 0 points", text)
+        self.assertIn("Turn 14 is now open", text)
+        self.assertEqual(kwargs["parent_uri"], move.reply.uri)
+        self.assertLessEqual(len(text), 300)
+
+    def test_a_finishing_cascade_does_not_claim_a_new_turn_is_open(self):
+        state = game.new_game(1, rng=random.Random(5), mine_budget=2)
+        state.status = game.CLEARED
+        move = votes.Move("did:a", "a.bsky.social", "E3",
+                          reply("did:a", "E3"))
+        text = main.build_cascade_skip_reply(state, move)
+        self.assertIn("next board begins soon", text)
+        self.assertNotIn("now open", text)
 
 
 class Persistence(unittest.TestCase):
@@ -395,9 +490,10 @@ class QuietTurnsTeach(unittest.TestCase):
         analysis = solver.analyze(position)
         if not analysis.safe:
             self.skipTest("this seed opens onto a guess")
-        plays, source = main.apply_knockout_moves(
+        plays, source, superseded = main.apply_knockout_moves(
             self.state, [], set(), position, analysis)
         self.assertEqual(source, "bot")
+        self.assertEqual(superseded, [])
         self.assertTrue(plays[0].why.endswith(f"{plays[0].coord} is clear."),
                         plays[0].why)
 
