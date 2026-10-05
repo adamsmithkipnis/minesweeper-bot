@@ -387,6 +387,53 @@ class EveryMoverIsAcknowledged(unittest.TestCase):
         self.assertIn("All time: 203", reply)
         self.assertLessEqual(len(reply), 300)
 
+    def test_a_safe_move_is_never_described_as_a_mine(self):
+        """Live on 1 October: turn 21 had three movers, the last of them
+        knocked out, and the other two were told "You opened E11 — it hit a
+        mine" in the same reply that gave them +3. The phrase was reading
+        the turn's last result instead of the player's own.
+        """
+        state = self.state
+        state.turn_number = 21
+        safe = main.Play("did:m", "mehtis.bsky.social", "E11", game.SAFE, 3,
+                         reply_uri="at://m/x", reply_cid="c")
+        # Exactly the live shape: the board's own last move was the mine.
+        state.last_coord, state.last_result = "C1", game.MINE
+        state.revealed[game.coord_to_index("E11")] = 2
+
+        reply = main.build_knockout_credit_reply(state, safe, 24, 764)
+        self.assertIn("🎯", reply)
+        self.assertNotIn("hit a mine", reply)
+        self.assertIn("touching 2 mines", reply)
+        self.assertIn("+3 points", reply)
+
+    def test_the_player_who_did_hit_one_is_still_told_so(self):
+        state = self.state
+        state.last_result = game.SAFE      # somebody else moved last
+        mine = main.Play("did:c", "coil.bsky.social", "C1", game.MINE,
+                         reply_uri="at://c/x", reply_cid="c")
+        reply = main.build_knockout_credit_reply(state, mine, 12, 942)
+        self.assertIn("💥", reply)
+        self.assertIn("a mine", reply)
+        self.assertNotIn("point", reply)      # a mine scores nothing
+        self.assertIn("All time: 942", reply)
+
+    def test_the_phrase_follows_the_cell_not_the_turn(self):
+        """Whatever the turn ended in, a credited move reads as a credited
+        move and a mine reads as a mine."""
+        state = self.state
+        state.revealed[game.coord_to_index("D4")] = 1
+        state.revealed[game.coord_to_index("D5")] = 0
+        for last in (game.SAFE, game.MINE, game.ALREADY):
+            state.last_result = last
+            for coord, points, expected in (("D4", 4, "touching 1 mine"),
+                                            ("D5", 9, "the whole region")):
+                play = main.Play("did:a", "a.bsky.social", coord, game.SAFE,
+                                 points, reply_uri="at://a/x", reply_cid="c")
+                reply = main.build_knockout_credit_reply(state, play, 1, 1)
+                self.assertIn(expected, reply, f"last={last} coord={coord}")
+                self.assertNotIn("hit a mine", reply, f"last={last}")
+
     def test_the_reply_to_a_knocked_out_player_says_how_long(self):
         play = main.Play("did:a", "a.bsky.social", "G7", game.MINE,
                          reply_uri="at://a/x", reply_cid="c")

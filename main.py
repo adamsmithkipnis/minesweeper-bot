@@ -82,9 +82,18 @@ def _plural(n: int, word: str) -> str:
     return f"{n} {word}" + ("" if n == 1 else "s")
 
 
-def _outcome_phrase(state: game.GameState, coord: str) -> str:
-    """"was safe, touching 2 mines" / "hit a mine"."""
-    if state.last_result == game.MINE:
+def _outcome_phrase(state: game.GameState, coord: str,
+                    result: str | None = None) -> str:
+    """"was safe, touching 2 mines" / "hit a mine".
+
+    `result` is the outcome of *this* cell, and every caller that knows it
+    must pass it. Several players move in one knockout turn, so
+    `state.last_result` belongs to whoever moved last — falling back to it
+    told two players who had opened safe cells that they had hit a mine,
+    in the same reply that awarded them points, because a third player was
+    knocked out later in the same turn.
+    """
+    if (result or state.last_result) == game.MINE:
         return "hit a mine"
     try:
         count = state.revealed[game.coord_to_index(coord)]
@@ -303,7 +312,7 @@ def build_knockout_credit_reply(state: game.GameState, play,
         scored = ""
     else:
         head = (f"🎯 You opened {play.coord} on turn {state.turn_number} — "
-                f"it {_outcome_phrase(state, play.coord)}.")
+                f"it {_outcome_phrase(state, play.coord, play.result)}.")
         scored = f"\n+{_plural(play.points, 'point')}"
     return _with_tags(
         f"{head}\n{scored}\n"
