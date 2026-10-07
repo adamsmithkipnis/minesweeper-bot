@@ -136,7 +136,7 @@ class CascadeCollisions(unittest.TestCase):
         analysis = solver.analyze(position)
         already = {game.index_to_coord(r, c) for r, c in state.revealed}
 
-        plays, source, superseded = main.apply_knockout_moves(
+        plays, source, superseded, duplicates = main.apply_knockout_moves(
             state,
             [reply("first", first, "1"), reply("second", consumed, "2")],
             already, position, analysis)
@@ -145,15 +145,16 @@ class CascadeCollisions(unittest.TestCase):
         self.assertEqual([p.did for p in plays], ["first"])
         self.assertEqual([(m.did, m.coord) for m in superseded],
                          [("second", consumed)])
+        self.assertEqual(duplicates, [])
 
-    def test_calling_the_same_cell_is_not_mislabeled_as_a_cascade(self):
+    def test_calling_the_same_cell_is_preserved_as_a_duplicate(self):
         state = game.new_game(1, rng=random.Random(5), mine_budget=2)
         first, _ = self._cascade_pair(state)
         position = solver.Position.from_state(state)
         analysis = solver.analyze(position)
         already = {game.index_to_coord(r, c) for r, c in state.revealed}
 
-        plays, source, superseded = main.apply_knockout_moves(
+        plays, source, superseded, duplicates = main.apply_knockout_moves(
             state,
             [reply("first", first, "1"), reply("second", first, "2")],
             already, position, analysis)
@@ -161,6 +162,8 @@ class CascadeCollisions(unittest.TestCase):
         self.assertEqual(source, "crowd")
         self.assertEqual([p.did for p in plays], ["first"])
         self.assertEqual(superseded, [])
+        self.assertEqual([(m.did, m.coord) for m in duplicates],
+                         [("second", first)])
 
     def test_the_skipped_player_is_told_why_and_where_to_play(self):
         state = game.new_game(1, rng=random.Random(5), mine_budget=2)
@@ -192,6 +195,40 @@ class CascadeCollisions(unittest.TestCase):
         move = votes.Move("did:a", "a.bsky.social", "E3",
                           reply("did:a", "E3"))
         text = main.build_cascade_skip_reply(state, move)
+        self.assertIn("next board begins soon", text)
+        self.assertNotIn("now open", text)
+
+    def test_the_later_duplicate_caller_is_told_someone_was_first(self):
+        state = game.new_game(1, rng=random.Random(5), mine_budget=2)
+        state.turn_number = 14
+        move = votes.Move("did:a", "a.bsky.social", "K8",
+                          reply("did:a", "K8"))
+        sent = []
+        real_reply, real_remember = main.bluesky.post_reply, main._remember
+        main.bluesky.post_reply = lambda text, **kw: (
+            sent.append((text, kw)) or "at://sent/1")
+        main._remember = lambda *a, **k: None
+        try:
+            main._notify_duplicate_skips(state, [move])
+        finally:
+            main.bluesky.post_reply, main._remember = real_reply, real_remember
+
+        self.assertEqual(len(sent), 1)
+        text, kwargs = sent[0]
+        self.assertIn("K8 was valid", text)
+        self.assertIn("another player opened it first", text)
+        self.assertIn("earned 0 points", text)
+        self.assertIn("Turn 14 is now open", text)
+        self.assertEqual(kwargs["parent_uri"], move.reply.uri)
+        self.assertLessEqual(len(text), 300)
+
+    def test_a_finishing_duplicate_does_not_claim_a_new_turn_is_open(self):
+        state = game.new_game(1, rng=random.Random(5), mine_budget=2)
+        state.status = game.CLEARED
+        move = votes.Move("did:a", "a.bsky.social", "K8",
+                          reply("did:a", "K8"))
+        text = main.build_duplicate_skip_reply(state, move)
+        self.assertIn("another player opened it first", text)
         self.assertIn("next board begins soon", text)
         self.assertNotIn("now open", text)
 
@@ -537,10 +574,11 @@ class QuietTurnsTeach(unittest.TestCase):
         analysis = solver.analyze(position)
         if not analysis.safe:
             self.skipTest("this seed opens onto a guess")
-        plays, source, superseded = main.apply_knockout_moves(
+        plays, source, superseded, duplicates = main.apply_knockout_moves(
             self.state, [], set(), position, analysis)
         self.assertEqual(source, "bot")
         self.assertEqual(superseded, [])
+        self.assertEqual(duplicates, [])
         self.assertTrue(plays[0].why.endswith(f"{plays[0].coord} is clear."),
                         plays[0].why)
 
