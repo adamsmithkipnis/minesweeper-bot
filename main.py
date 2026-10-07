@@ -1051,30 +1051,53 @@ def _announce_milestones(state: game.GameState, movers: list) -> None:
                 logger.exception("Failed to release a milestone claim")
 
 
-def _confirm_first_flag(state: game.GameState, claimed: dict) -> None:
-    """Answer the first person to flag anything on this board.
-
-    Flags on the board teach the syntax, but somebody has to go first. A
-    public confirmation shows the rest of the thread that it worked.
-    """
-    earliest, coords = None, []
+def _confirm_first_flags(state: game.GameState, claimed: dict) -> None:
+    """Teach each player once, when they place their first-ever flag."""
+    by_player = {}
     for coord, repliers in claimed.items():
         for reply in repliers:
-            if earliest is None or (reply.created_at or "") < (earliest.created_at or ""):
-                earliest = reply
-    if earliest is None or not earliest.uri:
-        return
-    coords = sorted(c for c, rs in claimed.items()
-                    if any(r.did == earliest.did for r in rs))
-    try:
-        uri = bluesky.post_reply(
-            build_flag_reply(coords, len(db.flag_counts(state.game_id))),
-            parent_uri=earliest.uri, parent_cid=earliest.cid,
-            root_uri=earliest.root_uri, root_cid=earliest.root_cid,
-            kind="flagack")
-        _remember(uri, "flagack", state.game_id, state.turn_number)
-    except Exception:
-        logger.exception("Failed to confirm the first flag")
+            if not reply.did or not reply.uri:
+                continue
+            entry = by_player.setdefault(reply.did,
+                                         {"reply": reply, "coords": set()})
+            entry["coords"].add(coord)
+            if ((reply.created_at or "")
+                    < (entry["reply"].created_at or "")):
+                entry["reply"] = reply
+
+    ordered = sorted(by_player.items(),
+                     key=lambda item: item[1]["reply"].created_at or "")
+    for did, entry in ordered:
+        reply = entry["reply"]
+        try:
+            if not db.claim_flag_tutorial(did):
+                continue
+        except Exception:
+            logger.exception("Failed to reserve flag tutorial for %s",
+                             reply.handle)
+            continue
+        try:
+            uri = bluesky.post_reply(
+                build_flag_reply(sorted(entry["coords"]),
+                                 len(db.flag_counts(state.game_id))),
+                parent_uri=reply.uri, parent_cid=reply.cid,
+                root_uri=reply.root_uri, root_cid=reply.root_cid,
+                kind="flagack")
+        except Exception:
+            logger.exception("Failed to confirm first flag for %s",
+                             reply.handle)
+            try:
+                db.release_flag_tutorial(did)
+            except Exception:
+                logger.exception("Failed to release flag tutorial for %s",
+                                 reply.handle)
+            continue
+        try:
+            _remember(uri, "flagack", state.game_id, state.turn_number)
+        except Exception:
+            # The public reply succeeded. Keep the lifetime claim so a post
+            # logging failure cannot make us send the tutorial twice.
+            logger.exception("Failed to remember flag tutorial reply")
 
 
 def _fetch_replies(uri: str) -> list:
@@ -1118,14 +1141,13 @@ def _game_tick() -> None:
     replies = _fetch_replies(state.last_post_uri)
     vote = votes.tally(replies, already_open, state.rows, state.cols)
 
-    first_flag_of_the_board = not db.flag_counts(state.game_id)
     claimed, withdrawn = votes.collect_flags(replies, already_open,
                                              state.rows, state.cols)
     _record_flags(state, claimed, withdrawn)
 
     if config.KNOCKOUT:
         _play_knockout_turn(state, replies, already_open, position, analysis,
-                            first_flag_of_the_board, claimed)
+                            claimed)
         return
 
     # 2. Decide. The quorum exists to stop one stray vote carrying a turn when
@@ -1259,8 +1281,8 @@ def _game_tick() -> None:
     if not finished:
         _resolve_flags(state, coord, result, revealed_before)
 
-    if first_flag_of_the_board and claimed:
-        _confirm_first_flag(state, claimed)
+    if claimed:
+        _confirm_first_flags(state, claimed)
 
     if not move_recorded:
         try:
@@ -1290,7 +1312,7 @@ def _game_tick() -> None:
 
 def _play_knockout_turn(state: game.GameState, replies: list,
                         already_open: set, position, analysis,
-                        first_flag_of_the_board: bool, claimed: dict) -> None:
+                        claimed: dict) -> None:
     """One knockout turn: everybody eligible opens a cell of their own.
 
     Same ordering discipline as the plurality path — the move is applied in
@@ -1364,8 +1386,8 @@ def _play_knockout_turn(state: game.GameState, replies: list,
 
     if not finished:
         _resolve_flags(state, last.coord, last.result, revealed_before)
-    if first_flag_of_the_board and claimed:
-        _confirm_first_flag(state, claimed)
+    if claimed:
+        _confirm_first_flags(state, claimed)
 
     db.save_state(state)
 

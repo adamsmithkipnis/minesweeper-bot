@@ -11,7 +11,7 @@ import random
 import tempfile
 import unittest
 
-from helpers import config, db, game, solver, votes
+from helpers import config, db, game, main, solver, votes
 
 try:
     import renderer
@@ -124,6 +124,58 @@ class Scoring(unittest.TestCase):
         db.resolve_flags(1, {"C3": True})
         self.assertEqual(db.flag_counts(1), {})
         self.assertEqual(db.flag_counts(2), {"C3": 1})
+
+
+class FirstFlagTutorial(unittest.TestCase):
+    def setUp(self):
+        self._old = config.DB_PATH
+        config.DB_PATH = os.path.join(tempfile.mkdtemp(), "tutorial.db")
+        db.init_db()
+        self.state = game.new_game(1, rng=random.Random(5))
+        self.state.turn_number = 7
+        self.sent = []
+        self._reply, self._remember = main.bluesky.post_reply, main._remember
+        main.bluesky.post_reply = lambda text, **kw: (
+            self.sent.append((text, kw)) or f"at://sent/{len(self.sent)}")
+        main._remember = lambda *a, **k: None
+
+    def tearDown(self):
+        main.bluesky.post_reply, main._remember = self._reply, self._remember
+        config.DB_PATH = self._old
+
+    def test_each_player_gets_the_tutorial_only_on_their_first_ever_flag(self):
+        first = reply("new", "flag C3 and D4", "1")
+        claimed = {"C3": [first], "D4": [first]}
+        main._confirm_first_flags(self.state, claimed)
+        main._confirm_first_flags(self.state, {"E5": [reply("new", "flag E5", "2")]})
+
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn("Flagged C3, D4", self.sent[0][0])
+        self.assertEqual(self.sent[0][1]["parent_uri"], first.uri)
+
+    def test_two_new_flaggers_each_get_their_own_tutorial(self):
+        first = reply("a", "flag C3", "1")
+        second = reply("b", "flag D4", "2")
+        main._confirm_first_flags(self.state,
+                                  {"C3": [first], "D4": [second]})
+
+        self.assertEqual(len(self.sent), 2)
+        self.assertEqual({kw["parent_uri"] for _, kw in self.sent},
+                         {first.uri, second.uri})
+
+    def test_withdrawing_a_flag_does_not_make_the_tutorial_repeat(self):
+        self.assertTrue(db.claim_flag_tutorial("did:a"))
+        db.add_flag(1, "C3", "did:a", "a", 1)
+        db.remove_flag(1, "C3", "did:a")
+        self.assertFalse(db.claim_flag_tutorial("did:a"))
+
+    def test_a_failed_reply_can_be_retried_on_the_next_flag(self):
+        main.bluesky.post_reply = lambda *a, **k: (_ for _ in ()).throw(
+            RuntimeError("rate limited"))
+        main._confirm_first_flags(
+            self.state, {"C3": [reply("retry", "flag C3")]})
+        self.assertTrue(db.claim_flag_tutorial("retry"),
+                        "a failed post must release the lifetime claim")
 
 
 @unittest.skipUnless(HAS_PILLOW, "Pillow not installed (use .venv/bin/python)")

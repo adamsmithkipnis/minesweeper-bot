@@ -108,5 +108,28 @@ class MovesTable(unittest.TestCase):
             config.DB_PATH = old
 
 
+class FlagTutorialTable(unittest.TestCase):
+    def test_existing_flaggers_are_backfilled_as_experienced_players(self):
+        old = config.DB_PATH
+        config.DB_PATH = os.path.join(tempfile.mkdtemp(), "legacy_flags.db")
+        try:
+            conn = sqlite3.connect(config.DB_PATH)
+            conn.executescript(
+                "CREATE TABLE flags (id INTEGER PRIMARY KEY, game_id INTEGER,"
+                " coord TEXT, did TEXT, handle TEXT, turn_number INTEGER,"
+                " correct INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);"
+                "INSERT INTO flags (game_id, coord, did, handle, turn_number)"
+                " VALUES (1, 'C3', 'did:experienced', 'old.bsky.social', 1);"
+            )
+            conn.commit(); conn.close()
+
+            db.init_db()
+
+            self.assertFalse(db.claim_flag_tutorial("did:experienced"))
+            self.assertTrue(db.claim_flag_tutorial("did:new"))
+        finally:
+            config.DB_PATH = old
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -84,6 +84,14 @@ CREATE TABLE IF NOT EXISTS flags (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_flags_one_per_person
     ON flags (game_id, coord, did);
 
+-- Players who have already received the one-time flag tutorial. This is
+-- separate from flags because an unresolved claim can be withdrawn and
+-- deleted, but the tutorial must still remain a lifetime one-time event.
+CREATE TABLE IF NOT EXISTS flag_tutorials (
+    did TEXT PRIMARY KEY,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Knocked-out players, per board. A mine takes the player who opened it out
 -- of that board rather than ending it for everyone; they can still flag.
 CREATE TABLE IF NOT EXISTS eliminations (
@@ -184,8 +192,21 @@ def init_db() -> None:
         # blocking the other. It is a property of the file, set once. (Not
         # supported on network filesystems — keep the database on local disk.)
         conn.execute("PRAGMA journal_mode=WAL")
+        had_flag_tutorials = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'flag_tutorials'"
+        ).fetchone() is not None
         conn.executescript(_SCHEMA)
         _migrate(conn)
+        if not had_flag_tutorials:
+            # Existing flaggers are experienced users. Backfill them once on
+            # migration so deploying this feature does not tutorial-spam the
+            # established player base on their next flag.
+            conn.execute(
+                "INSERT OR IGNORE INTO flag_tutorials (did) "
+                "SELECT DISTINCT did FROM flags "
+                "WHERE did IS NOT NULL AND did != ''"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -539,6 +560,23 @@ def get_history(limit: int = 20) -> list:
 # Flags
 # ---------------------------------------------------------------------------
 
+def claim_flag_tutorial(did: str) -> bool:
+    """Reserve a player's lifetime one-time flag tutorial."""
+    if not did:
+        return False
+    with _connect() as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO flag_tutorials (did) VALUES (?)", (did,))
+        return cur.rowcount == 1
+
+
+def release_flag_tutorial(did: str) -> None:
+    """Let a failed tutorial post be attempted on the player's next flag."""
+    if not did:
+        return
+    with _connect() as conn:
+        conn.execute("DELETE FROM flag_tutorials WHERE did = ?", (did,))
+
 def add_flag(game_id: int, coord: str, did: str, handle: str,
              turn_number: int) -> None:
     """Record one person's claim that `coord` holds a mine. Idempotent."""
@@ -731,6 +769,7 @@ def reset_all(keep_record: bool = False) -> None:
             conn.execute("DELETE FROM game_history")
             conn.execute("DELETE FROM moves")
             conn.execute("DELETE FROM flags")
+            conn.execute("DELETE FROM flag_tutorials")
             conn.execute("DELETE FROM eliminations")
             # Points go with the moves, so the milestones they earned have to
             # go too, or nobody can ever reach their first hundred again.
