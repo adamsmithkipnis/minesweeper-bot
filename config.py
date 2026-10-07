@@ -7,6 +7,7 @@ here, at module scope, is what makes that impossible.
 """
 
 import os
+import re
 
 from dotenv import load_dotenv
 
@@ -116,14 +117,65 @@ DRY_DIR = os.environ.get("DRY_DIR", "dry-run")
 # the board information out of a post.
 HASHTAG_ALWAYS = os.environ.get("HASHTAG_ALWAYS", "#Minesweeper")
 HASHTAG_COUNT = int(os.environ.get("HASHTAG_COUNT", "5"))
-HASHTAG_POOL = os.environ.get(
-    "HASHTAG_POOL",
-    "#gamedev #indiedev #solodev #indiegames #indiegame #gamedevelopment "
-    "#puzzle #puzzlegames #logicpuzzles #braingames "
-    "#retrogaming #retrogames #classicgames "
-    "#play #playtogether #crowdplay #dailygame #gamenight "
-    "#bots #botsky #bskygames #opensource #python",
-).split()
+
+# The pool lives in hashtags.txt rather than here, so either agent can extend
+# it without touching code and a new tag ships with a git push. Lines are
+# `#tag [weight] [day]`; see the file's own header for why weights exist.
+HASHTAG_FILE = os.environ.get(
+    "HASHTAG_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 "hashtags.txt"))
+
+_TAG_LINE = re.compile(
+    r"^(#[A-Za-z0-9_]{1,64})(?:\s+(\d+))?"
+    r"(?:\s+(mon|tue|wed|thu|fri|sat|sun))?$")
+
+
+def _parse_hashtags(text: str) -> tuple:
+    """(tags, {tag: weight}, {tag: day}) from the pool file's contents.
+
+    A line that is not a well-formed tag is a comment, which is what makes
+    the file's own documentation possible. Purely numeric tags are dropped
+    because Bluesky rejects them.
+    """
+    tags, weights, days = [], {}, {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        match = _TAG_LINE.match(line)
+        if not match or not re.search(r"[A-Za-z]", match.group(1)):
+            continue
+        tag = match.group(1)
+        if tag.lower() in (t.lower() for t in tags):
+            continue
+        tags.append(tag)
+        weights[tag.lower()] = int(match.group(2) or 1)
+        if match.group(3):
+            days[tag.lower()] = match.group(3)
+    return tags, weights, days
+
+
+def _load_hashtags() -> tuple:
+    try:
+        with open(HASHTAG_FILE) as handle:
+            return _parse_hashtags(handle.read())
+    except OSError:
+        return [], {}, {}
+
+
+HASHTAG_POOL, HASHTAG_WEIGHT, HASHTAG_DAY = _load_hashtags()
+
+# Anything in the environment is *added* to the shipped pool rather than
+# replacing it. The deliberate choice: the Mini's .env already pins an older,
+# shorter HASHTAG_POOL, and an override would have silently kept the bot on
+# 23 tags after this shipped — while ignoring the variable outright would
+# have thrown away a tag somebody added by hand.
+for _tag in os.environ.get("HASHTAG_POOL", "").split():
+    if _tag.startswith("#") and _tag.lower() not in HASHTAG_WEIGHT:
+        HASHTAG_POOL.append(_tag)
+        HASHTAG_WEIGHT[_tag.lower()] = 1
+
+if not HASHTAG_POOL:        # no file and no override: stay findable anyway
+    HASHTAG_POOL = [HASHTAG_ALWAYS]
+    HASHTAG_WEIGHT = {HASHTAG_ALWAYS.lower(): 1}
 
 # ---------------------------------------------------------------------------
 # Celebrations

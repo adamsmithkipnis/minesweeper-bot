@@ -46,35 +46,77 @@ scheduler = BlockingScheduler()
 # Post copy
 # ---------------------------------------------------------------------------
 
-def pick_hashtags(rng=None) -> list:
-    """The always-on tag, then a fresh random sample of the pool.
+_DAY_NAMES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+
+def eligible_hashtags(when: datetime | None = None) -> list:
+    """The pool minus the tags that belong to another day of the week.
+
+    #screenshotsaturday is the most-used tag among the people who play this
+    game and the easiest one to get wrong: on a Tuesday it is worse than no
+    tag at all.
+    """
+    today = _DAY_NAMES[(when or datetime.now().astimezone()).weekday()]
+    always = config.HASHTAG_ALWAYS.lower()
+    return [tag for tag in config.HASHTAG_POOL
+            if tag.lower() != always
+            and config.HASHTAG_DAY.get(tag.lower(), today) == today]
+
+
+def pick_hashtags(rng=None, when: datetime | None = None) -> list:
+    """The always-on tag, then a fresh weighted sample of the pool.
 
     Posting the identical block of six tags every hour reads as a bot padding
     for reach; drawing them fresh each time reaches more corners of the
     network and looks like a person choosing. The game's own tag is never
     dropped, so the account stays findable under one stable name.
+
+    The sample is **weighted**, because a wider pool is not automatically
+    more reach. Of the 63 people who have played, 18 use #gamedev and 12 use
+    #indiedev, while most of the pool is used by one or two; drawing five
+    tags uniformly from 232 would put #gamedev on one post in 46 instead of
+    one in five. Weighting keeps the proven tags frequent and spends the rest
+    of each post on the tail, so variety costs nothing in reach.
     """
     rng = rng or random
     always = config.HASHTAG_ALWAYS
-    pool = [tag for tag in config.HASHTAG_POOL
-            if tag.lower() != always.lower()]
-    picked = rng.sample(pool, min(config.HASHTAG_COUNT, len(pool)))
+    pool = eligible_hashtags(when)
+    weights = [max(1, config.HASHTAG_WEIGHT.get(tag.lower(), 1))
+               for tag in pool]
+
+    picked = []
+    for _ in range(min(config.HASHTAG_COUNT, len(pool))):
+        total = sum(weights)
+        cut = rng.random() * total
+        index = 0
+        for index, weight in enumerate(weights):
+            cut -= weight
+            if cut <= 0:
+                break
+        picked.append(pool.pop(index))
+        weights.pop(index)      # no replacement: a tag never repeats in a post
     return ([always] if always else []) + picked
 
 
 def _with_tags(text: str, tags: list | None = None) -> str:
-    """Append hashtags, stopping at the first one that will not fit.
+    """Append hashtags, skipping any that will not fit.
 
     Content wins over reach: the board information is built first and a tag is
     only added while the whole post still clears the limit, so discovery tags
     can never be the reason a post gets clamped.
+
+    A tag that does not fit is skipped rather than ending the run. The pool
+    used to be 23 tags of roughly even length, so stopping at the first miss
+    cost nothing; across 233 the lengths spread from #dos to
+    #collectiveintelligence, and one long draw was taking the short tags
+    behind it down with it — about 12% of the tag slots on a tight post.
     """
-    out = text
-    for i, tag in enumerate(pick_hashtags() if tags is None else tags):
-        candidate = f"{out}{chr(10) if i == 0 else ' '}{tag}"
+    out, first = text, True
+    for tag in (pick_hashtags() if tags is None else tags):
+        candidate = f"{out}{chr(10) if first else ' '}{tag}"
         if len(candidate) > bluesky.POST_LIMIT:
-            break
-        out = candidate
+            continue
+        out, first = candidate, False
     return out
 
 

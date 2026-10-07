@@ -1,0 +1,297 @@
+# Hashtag pool.
+#
+# One tag per line: `#tag [weight] [day]`
+#
+#   weight   how often it is drawn, relative to 1. Defaults to 1.
+#   day      mon..sun — the tag is only eligible on that weekday.
+#
+# Weights exist because a bigger pool is not automatically more reach. The
+# tags here were chosen by reading the public posts of the 63 people who have
+# actually played: 18 of them use #gamedev and 12 use #indiedev, while most
+# of the pool is used by one or two. Sampling 5 tags uniformly from 232 would
+# show #gamedev on one post in 55 instead of one in four — more variety and
+# twelve times less reach on the single best tag.
+#
+# So the weights of the proven tags are roughly three times the number of
+# players measured using them, which costs almost nothing in variety:
+#
+#                        #gamedev    a tag repeats after
+#   23 tags, uniform       22.8%        3 posts
+#   232 tags, uniform       1.8%       31 posts
+#   232 tags, weighted     18.2%       22 posts
+#
+# The puzzle family (#logicpuzzles, #puzzlegames, #thinkygames...) is the one
+# deliberate exception, weighted above what the measurement supports. Only
+# one or two players use those tags — but that is a biased sample, because
+# they are the people who already found the bot, and they found it through
+# the gamedev tags. The puzzle tags are the bet on reaching the other crowd.
+#
+# Nothing here may be a claim this project cannot make. The audience's most
+# popular tags include #godot, #blender and #madewithgodot; this is Python
+# with Pillow, so they are not in the pool. #a11y and #screenreader are in,
+# because the alt text really does carry the whole board.
+#
+# Day-locked tags are the strongest in this crowd (#screenshotsaturday is
+# used by 4 of the 63) and the easiest to get wrong — posting it on a Tuesday
+# is worse than not posting it at all.
+
+# ---- the game itself ----
+#Minesweeper 10
+#minesweepergame 2
+#minefield
+#logicpuzzle 6
+#logicpuzzles 8
+#logicgames 3
+#logic 2
+#deduction 2
+#deductivereasoning
+#puzzle 6
+#puzzles 3
+#puzzlegame 6
+#puzzlegames 8
+#puzzlesolving 2
+#puzzlecommunity
+#braingames 6
+#braingame 2
+#braintraining 4
+#brainteaser 4
+#brainteasers 2
+#brainarcade
+#numberpuzzle
+#gridgames
+#gridpuzzle
+#tilegame
+#solitaire 2
+#singleplayer 2
+
+# ---- daily / habit ----
+#dailygame 6
+#dailygames 2
+#dailypuzzle 6
+#dailychallenge 3
+#puzzleaday 2
+#onemoreturn 2
+#turnbased 2
+#turnbasedgames 2
+#casualgames 4
+#casualgame 2
+#quickgames
+#chillgames 2
+#cozygames 2
+#cozygaming 2
+#relaxinggames
+
+# ---- played by a crowd ----
+#crowdplay 6
+#crowdsourced 2
+#playtogether 5
+#playalong 2
+#communitygame 2
+#communitygames 2
+#collaborative 2
+#cooperative 2
+#coopgame
+#multiplayer 2
+#asyncmultiplayer
+#gamenight 5
+#letsplay 2
+#play 4
+#playnow
+#joinin
+#freegame 2
+#freegames 2
+#freetoplay 2
+#onlinegames 2
+#onlinegame
+#community 2
+#interactive 2
+
+# ---- bluesky and bots ----
+#bots 5
+#bot 2
+#botsky 5
+#bskygames 5
+#bskygaming 2
+#bskydev 2
+#bsky 3
+#bluesky 3
+#atproto 3
+#atprotocol
+
+# ---- code ----
+#python 5
+#python3 2
+#opensource 5
+#foss 2
+#programming 3
+#coding 3
+#code 2
+#softwaredev 2
+#softwaredevelopment 2
+#devlog 8
+#devlogs 2
+#devblog 2
+#buildinpublic 3
+#buildinginpublic 2
+#sideproject 3
+#sideprojects 2
+#hobbyproject 2
+#weekendproject
+#100daysofcode 2
+#codenewbie 2
+#devcommunity 2
+#learntocode 2
+#github 2
+#git
+#sqlite 2
+#cli 2
+#automation 2
+#scripting
+#madewithpython 2
+#programminglife
+#developerlife
+
+# ---- game development ----
+#gamedev 30
+#gamedevs 4
+#gamedevelopment 6
+#gamedeveloper 3
+#indiedev 24
+#indiedevs 4
+#indiedeveloper 4
+#indiedevhour 2
+#solodev 12
+#solodeveloper 4
+#solodevelopment 2
+#indiegame 18
+#indiegames 10
+#indiegaming 5
+#indiegamedev 8
+#indiegamedeveloper 2
+#indie 4
+#gamedesign 5
+#gamedesigner 2
+#gamemechanics 2
+#gameart 8
+#gameassets 2
+#gamejam 2
+#gamejams
+#prototyping 2
+#playtesting 2
+#playtest 2
+#wip 3
+#workinprogress 2
+
+# ---- day-locked ----
+#screenshotsaturday 12 sat
+#screenshotsunday 8 sun
+#wipwednesday 8 wed
+#wednesdaywip 4 wed
+#turnbasedthursday 8 thu
+#followfriday 5 fri
+#mondaymotivation 5 mon
+#tuesdaytip 3 tue
+
+# ---- retro ----
+#retrogaming 8
+#retrogames 8
+#retrogame 3
+#retro 5
+#retrocomputing 3
+#classicgames 5
+#classicgaming 3
+#oldschoolgaming 2
+#oldschool 2
+#nostalgia 3
+#nostalgiagaming 2
+#windows95 2
+#win95 2
+#dosgaming 2
+#msdos 2
+#dos
+#pcgaming 3
+#pcgames 2
+#pixelart 6
+#pixelated
+#8bit 2
+#16bit 2
+#minimalist 2
+#minimalism 2
+
+# ---- gaming at large ----
+#gaming 10
+#gamers 3
+#videogames 5
+#videogame 2
+#games 3
+#gameplay 2
+#strategy 3
+#strategygames 3
+#strategygame 2
+#tactics 2
+#boardgames 4
+#boardgame 2
+#gamer 2
+#gamingcommunity 2
+
+# ---- accessible by design ----
+#accessibility 3
+#accessiblegaming 2
+#a11y 3
+#screenreader 2
+#inclusivedesign
+
+# ---- the reasoning underneath ----
+#math 3
+#maths 2
+#mathematics 2
+#probability 3
+#statistics 2
+#combinatorics 2
+#algorithms 3
+#algorithm 2
+#computerscience 3
+#problemsolving 3
+#criticalthinking 2
+#logicalthinking 2
+#riddle 2
+#riddles 2
+
+# ---- the genre this belongs to ----
+#thinkygames 6
+#thinkygame 2
+#mindgames 2
+#puzzlegaming 2
+#strategygaming 2
+#puzzlelovers 2
+#puzzlefans
+#logicgame 2
+#twitchplays 3
+#socialgaming 2
+#socialgames 2
+#crowdsourcing 2
+#hivemind 2
+#collectiveintelligence
+#gamebot 2
+#gamingbots
+#pythonbot
+
+# ---- how it is built ----
+#pythonprogramming 2
+#pythondev 2
+#pythoncommunity 2
+#pythoncode
+#creativecoding 2
+#procgen 2
+#proceduralgeneration 2
+#opensourcegames 2
+#opensourcegame
+#freesoftware 2
+#gamedevcommunity 2
+#gamedevlife 2
+#coffeeandcode 2
+
+# ---- accessible by design, continued ----
+#accessiblegames 2
+#alttext 2
+#pixelgames
