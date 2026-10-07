@@ -219,11 +219,48 @@ waits for its real slot rather than firing the moment this ships.
 ### Hashtags
 
 `#Minesweeper` is on every post so the game stays findable under one name.
-Five more are sampled fresh per post from a pool of 23 (`HASHTAG_POOL` in
-`.env`), because the same block of six tags 24 times a day reads as a bot
+Five more are sampled fresh per post from [`hashtags.txt`](hashtags.txt) —
+233 tags, because the same block of six tags 24 times a day reads as a bot
 padding for reach. Tags are appended only while they still fit under 300
 characters — content is built first, so reach can never be the reason a post
-gets clamped. Replies to individual followers carry one tag, not six.
+gets clamped, and a tag too long for the room left is skipped rather than
+ending the run. Replies to individual followers carry one tag, not six.
+
+The pool lives in a file rather than in `.env` so a new tag ships with a git
+push, and lines are `#tag [weight] [day]`.
+
+**Weights, because a wider pool is not automatically more reach.** The tags
+were chosen by reading the public posts of the 63 people who have actually
+played: 18 use `#gamedev` and 12 use `#indiedev`, while most of the pool is
+used by one or two. Sampling five uniformly from 233 would put `#gamedev` on
+one post in 55 instead of one in four — ten times the variety and twelve
+times less reach on the best tag. Weighting the proven tags at roughly three
+times their measured player count costs almost nothing in variety:
+
+| pool | `#gamedev` appears on | a tag repeats after |
+|---|---|---|
+| 23 tags, uniform (before) | 22.8% of posts | 3 posts |
+| 233 tags, uniform | 1.8% | 31 posts |
+| 233 tags, weighted (now) | 18.2% | 22 posts |
+
+The puzzle family is the one deliberate exception, weighted above what the
+measurement supports: only one or two players use `#logicpuzzles`, but that
+sample is biased — those are the people who already found the bot, and they
+found it through the gamedev tags.
+
+**Nothing in the pool may be a claim the project cannot make.** The
+audience's favourite tags include `#godot`, `#blender` and `#madewithgodot`;
+this is Python with Pillow, so they are not there. `#a11y` and
+`#screenreader` are, because the alt text really does carry the whole board.
+
+**Day-locked tags** carry a weekday and are only eligible on it.
+`#screenshotsaturday` is the strongest tag in this crowd and the easiest to
+get wrong — on a Tuesday it is worse than no tag at all.
+
+`HASHTAG_POOL` in `.env` still works, but it now **adds** to the shipped pool
+instead of replacing it. That is deliberate: the Mini's `.env` pins the older
+23-tag list, and an override would have quietly kept the bot on 23 tags,
+while ignoring the variable would have thrown away a tag added by hand.
 
 ## Layout
 

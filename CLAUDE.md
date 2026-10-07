@@ -57,6 +57,12 @@ or in the Battleship bot:
 - A milestone rung is claimed in the database *before* its post goes out, and
   released if the post fails. Claim-then-post is what makes congratulating
   somebody twice impossible; post-then-record would do the opposite.
+- `hashtags.txt` is the hashtag pool and `HASHTAG_POOL` in `.env` *adds* to
+  it. The Mini's `.env` still pins the old 23-tag list, and making the
+  variable an override would have silently kept the live bot on those 23
+  after the pool grew to 233.
+- No tag may be a claim the project cannot make: the audience's favourites
+  include `#godot` and `#blender`, and this is Python.
 - The dashboard shows the solver's answers. It binds to localhost. Leave it
   there.
 
