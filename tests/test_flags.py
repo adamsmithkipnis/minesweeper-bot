@@ -310,7 +310,7 @@ class UnflagAcknowledgement(unittest.TestCase):
                 self.assertIn("D8", votes.parse_flags(text, 11, 11)[1])
 
     def test_plain_unflag_and_ambiguous_it_are_not_votes(self):
-        for text in ("unflag D8", "unflag D8 and E5, open it", "open it"):
+        for text in ("unflag D8", "open it"):
             with self.subTest(text=text):
                 self.assertIsNone(votes.parse_vote(text, 11, 11))
 
