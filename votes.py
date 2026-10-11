@@ -171,6 +171,11 @@ def find_mentions(text: str, rows: int, cols: int) -> list:
     return out
 
 
+# "Unflag D8 and open it" — the pronoun is the cell just unflagged.
+_OPEN_IT = re.compile(
+    rf"\b(?:{_VOTE_WORDS})\s+(?:it|that|this|there)\b", re.IGNORECASE)
+
+
 def parse_vote(text: str, rows: int, cols: int) -> str | None:
     """The one coordinate a reply is voting for, or None.
 
@@ -183,6 +188,10 @@ def parse_vote(text: str, rows: int, cols: int) -> str | None:
     candidates = [m for m in find_mentions(text, rows, cols)
                   if not m.is_warning and not m.is_unflag]
     if not candidates:
+        undone = {m.coord for m in find_mentions(text, rows, cols)
+                  if m.is_unflag}
+        if len(undone) == 1 and _OPEN_IT.search(text or ""):
+            return next(iter(undone))
         return None
 
     chosen = [m.coord for m in candidates if m.is_choice]
@@ -219,13 +228,19 @@ def collect_flags(replies: list, resolved: set, rows: int, cols: int) -> tuple:
     get one say. Cells that are already open are ignored: a flag on a revealed
     cell is a misreading, not a prediction.
     """
-    flags, unflags = {}, {}
+    # The latest word from each person on each cell wins, as with votes:
+    # "unflag C3" and then "flag C3" means flagged, not both.
+    latest = {}
     for reply in sorted(replies, key=lambda r: r.created_at or ""):
         flagged, unflagged = parse_flags(reply.text, rows, cols)
         for coord in flagged - resolved:
-            flags.setdefault(coord, []).append(reply)
-        for coord in unflagged - resolved:
-            unflags.setdefault(coord, []).append(reply)
+            latest[(reply.did, coord)] = (True, reply)
+        for coord in unflagged - resolved - flagged:
+            latest[(reply.did, coord)] = (False, reply)
+
+    flags, unflags = {}, {}
+    for (_, coord), (is_flag, reply) in latest.items():
+        (flags if is_flag else unflags).setdefault(coord, []).append(reply)
     return flags, unflags
 
 
