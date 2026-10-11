@@ -171,6 +171,11 @@ def find_mentions(text: str, rows: int, cols: int) -> list:
     return out
 
 
+# "Unflag D8 and open it" — the pronoun is the cell just unflagged.
+_OPEN_IT = re.compile(
+    rf"\b(?:{_VOTE_WORDS})\s+(?:it|that|this|there)\b", re.IGNORECASE)
+
+
 def parse_vote(text: str, rows: int, cols: int) -> str | None:
     """The one coordinate a reply is voting for, or None.
 
@@ -183,6 +188,10 @@ def parse_vote(text: str, rows: int, cols: int) -> str | None:
     candidates = [m for m in find_mentions(text, rows, cols)
                   if not m.is_warning and not m.is_unflag]
     if not candidates:
+        undone = {m.coord for m in find_mentions(text, rows, cols)
+                  if m.is_unflag}
+        if len(undone) == 1 and _OPEN_IT.search(text or ""):
+            return next(iter(undone))
         return None
 
     chosen = [m.coord for m in candidates if m.is_choice]

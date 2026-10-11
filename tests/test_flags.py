@@ -302,3 +302,21 @@ class UnflagAcknowledgement(unittest.TestCase):
 
     def test_the_tutorial_mentions_unflag(self):
         self.assertIn("unflag C3", main.build_tutorial_text(self.state))
+
+    def test_unflag_and_open_it_votes_for_that_cell(self):
+        for text in ("Unflag D8 and open it", "unflag D8 then open that"):
+            with self.subTest(text=text):
+                self.assertEqual(votes.parse_vote(text, 11, 11), "D8")
+                self.assertIn("D8", votes.parse_flags(text, 11, 11)[1])
+
+    def test_plain_unflag_and_ambiguous_it_are_not_votes(self):
+        for text in ("unflag D8", "unflag D8 and E5, open it", "open it"):
+            with self.subTest(text=text):
+                self.assertIsNone(votes.parse_vote(text, 11, 11))
+
+    def test_flag_list_then_unflag_on_separate_lines(self):
+        text = "B2\nFlag a4, b4, b7, c4\nUnflag b8"
+        self.assertEqual(votes.parse_vote(text, 11, 11), "B2")
+        flagged, unflagged = votes.parse_flags(text, 11, 11)
+        self.assertEqual(flagged, {"A4", "B4", "B7", "C4"})
+        self.assertEqual(unflagged, {"B8"})
