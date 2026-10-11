@@ -1,6 +1,6 @@
 # Minesweeper Bluesky Bot
 
-A game of Minesweeper played on one Bluesky account, where followers vote in
+A game of Minesweeper played on one Bluesky account, https://bsky.app/profile/playminesweeper.bsky.social, where followers vote in
 the replies for the next cell to open.
 
 Every hour the bot posts the board and asks for a coordinate. Replies are
