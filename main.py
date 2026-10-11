@@ -271,7 +271,7 @@ def build_tutorial_text(state: game.GameState) -> str:
     return _with_tags(
         f"HOW TO PLAY · Reply on the latest board (to {last})\n\n"
         f"Open a cell: D4\n"
-        f"Flag mines: flag C3 (several are okay)\n"
+        f"Flag mines: flag C3 · undo: unflag C3\n"
         f"Explain + play: C3 is a mine, so D4 is safe — D4\n"
         f"Change your vote: reply again; your latest choice counts.\n\n"
         f"One vote can decide. With 3+ voters, 2 must agree; "
@@ -335,6 +335,29 @@ def build_flag_reply(coords: list, total_flagged: int) -> str:
         f"🚩 Flagged {which}. It shows on the board and costs no turn — "
         f"you can flag and still {also} in the same reply.\n\n"
         f"{_plural(total_flagged, 'cell')} flagged so far.",
+        tags=[config.REPLY_HASHTAG])
+
+
+def build_unflag_reply(cells: dict, total_flagged: int) -> str:
+    """Acknowledge an unflag, and be honest when the flag stays up.
+
+    Flags are one mark per cell on the board but one claim per person, so
+    taking yours back only clears the cell if nobody else flagged it. `cells`
+    maps each coordinate to how many *other* people still have it flagged.
+    """
+    shown = sorted(cells)[:3]
+    cleared = [c for c in shown if not cells[c]]
+    kept = [c for c in shown if cells[c]]
+    parts = []
+    if cleared:
+        parts.append(f"{', '.join(cleared)} "
+                     f"{'is' if len(cleared) == 1 else 'are'} off the board")
+    for coord in kept:
+        parts.append(f"{coord} stays flagged — "
+                     f"{_plural(cells[coord], 'other player')} flagged it too")
+    return _with_tags(
+        f"🏳️ Unflagged. {'; '.join(parts)}.\n\n"
+        f"{_plural(total_flagged, 'cell')} flagged now.",
         tags=[config.REPLY_HASHTAG])
 
 
@@ -1142,6 +1165,42 @@ def _confirm_first_flags(state: game.GameState, claimed: dict) -> None:
             logger.exception("Failed to remember flag tutorial reply")
 
 
+def _confirm_unflags(state: game.GameState, withdrawn: dict) -> None:
+    """Answer each player who took a flag back, once per turn.
+
+    What it reports is read from the database as it stands, not from what
+    this turn removed, so a replayed turn cannot turn "off the board" into a
+    misleading "you hadn't flagged it".
+    """
+    by_player = {}
+    for coord, repliers in withdrawn.items():
+        for reply in repliers:
+            if not reply.did or not reply.uri:
+                continue
+            entry = by_player.setdefault(reply.did,
+                                         {"reply": reply, "coords": set()})
+            entry["coords"].add(coord)
+            if ((reply.created_at or "")
+                    < (entry["reply"].created_at or "")):
+                entry["reply"] = reply
+
+    ordered = sorted(by_player.values(),
+                     key=lambda e: e["reply"].created_at or "")
+    for entry in ordered:
+        reply = entry["reply"]
+        try:
+            counts = db.flag_counts(state.game_id)
+            cells = {c: counts.get(c, 0) for c in entry["coords"]}
+            text = build_unflag_reply(cells, len(counts))
+            uri = bluesky.post_reply(
+                text, parent_uri=reply.uri, parent_cid=reply.cid,
+                root_uri=reply.root_uri, root_cid=reply.root_cid,
+                kind="unflagack")
+            _remember(uri, "unflagack", state.game_id, state.turn_number)
+        except Exception:
+            logger.exception("Failed to confirm unflag for %s", reply.handle)
+
+
 def _fetch_replies(uri: str) -> list:
     if not uri:
         return []
@@ -1189,7 +1248,7 @@ def _game_tick() -> None:
 
     if config.KNOCKOUT:
         _play_knockout_turn(state, replies, already_open, position, analysis,
-                            claimed)
+                            claimed, withdrawn)
         return
 
     # 2. Decide. The quorum exists to stop one stray vote carrying a turn when
@@ -1325,6 +1384,8 @@ def _game_tick() -> None:
 
     if claimed:
         _confirm_first_flags(state, claimed)
+    if withdrawn:
+        _confirm_unflags(state, withdrawn)
 
     if not move_recorded:
         try:
@@ -1354,7 +1415,7 @@ def _game_tick() -> None:
 
 def _play_knockout_turn(state: game.GameState, replies: list,
                         already_open: set, position, analysis,
-                        claimed: dict) -> None:
+                        claimed: dict, withdrawn: dict) -> None:
     """One knockout turn: everybody eligible opens a cell of their own.
 
     Same ordering discipline as the plurality path — the move is applied in
@@ -1430,6 +1491,8 @@ def _play_knockout_turn(state: game.GameState, replies: list,
         _resolve_flags(state, last.coord, last.result, revealed_before)
     if claimed:
         _confirm_first_flags(state, claimed)
+    if withdrawn:
+        _confirm_unflags(state, withdrawn)
 
     db.save_state(state)
 

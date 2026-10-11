@@ -235,3 +235,70 @@ class Unflagging(unittest.TestCase):
         claimed, withdrawn = votes.parse_flags("unflag D6 and vote D6", 9, 9)
         self.assertIn("D6", withdrawn)
         self.assertEqual(votes.parse_vote("unflag D6 and vote D6", 9, 9), "D6")
+
+    def test_latest_word_wins_for_the_same_person(self):
+        replies = [reply("a", "unflag C3", "1"), reply("a", "flag C3", "2")]
+        flags, unflags = votes.collect_flags(replies, set(), 9, 9)
+        self.assertEqual(sorted(flags), ["C3"])
+        self.assertEqual(unflags, {})
+
+        replies = [reply("a", "flag C3", "1"), reply("a", "unflag C3", "2")]
+        flags, unflags = votes.collect_flags(replies, set(), 9, 9)
+        self.assertEqual(flags, {})
+        self.assertEqual(sorted(unflags), ["C3"])
+
+    def test_one_persons_unflag_does_not_cancel_anothers_flag(self):
+        replies = [reply("a", "flag C3", "1"), reply("b", "unflag C3", "2")]
+        flags, unflags = votes.collect_flags(replies, set(), 9, 9)
+        self.assertEqual([r.did for r in flags["C3"]], ["a"])
+        self.assertEqual([r.did for r in unflags["C3"]], ["b"])
+
+
+class UnflagAcknowledgement(unittest.TestCase):
+    def setUp(self):
+        self._old = config.DB_PATH
+        config.DB_PATH = os.path.join(tempfile.mkdtemp(), "unflag.db")
+        db.init_db()
+        self.state = game.new_game(1, rng=random.Random(5))
+        self.state.turn_number = 7
+        self.sent = []
+        self._reply, self._remember = main.bluesky.post_reply, main._remember
+        main.bluesky.post_reply = lambda text, **kw: (
+            self.sent.append((text, kw)) or f"at://sent/{len(self.sent)}")
+        main._remember = lambda *a, **k: None
+
+    def tearDown(self):
+        main.bluesky.post_reply, main._remember = self._reply, self._remember
+        config.DB_PATH = self._old
+
+    def test_text_says_the_cell_is_off_the_board(self):
+        text = main.build_unflag_reply({"C3": 0}, 4)
+        self.assertIn("C3 is off the board", text)
+        self.assertIn("4 cells flagged now", text)
+        self.assertLessEqual(len(text), 300)
+
+    def test_text_is_honest_when_someone_else_still_has_it_flagged(self):
+        text = main.build_unflag_reply({"C3": 1, "D4": 0}, 2)
+        self.assertIn("D4 is off the board", text)
+        self.assertIn("C3 stays flagged", text)
+        self.assertIn("1 other player flagged it too", text)
+
+    def test_a_player_is_answered_once_however_many_cells_they_clear(self):
+        db.add_flag(self.state.game_id, "C3", "did:other", "other", 1)
+        first = reply("a", "unflag C3 and D4", "1")
+        later = reply("a", "unflag E5", "2")
+        main._confirm_unflags(self.state, {"C3": [first], "D4": [first],
+                                           "E5": [later]})
+        self.assertEqual(len(self.sent), 1)
+        text, kw = self.sent[0]
+        self.assertEqual(kw["parent_uri"], first.uri)
+        self.assertIn("C3 stays flagged", text)
+        self.assertIn("D4", text)
+
+    def test_a_failed_reply_does_not_break_the_turn(self):
+        main.bluesky.post_reply = lambda *a, **k: (_ for _ in ()).throw(
+            RuntimeError("rate limited"))
+        main._confirm_unflags(self.state, {"C3": [reply("a", "unflag C3")]})
+
+    def test_the_tutorial_mentions_unflag(self):
+        self.assertIn("unflag C3", main.build_tutorial_text(self.state))
