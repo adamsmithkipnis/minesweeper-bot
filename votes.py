@@ -223,7 +223,17 @@ def parse_flags(text: str, rows: int, cols: int) -> tuple:
 
 def collect_flags(replies: list, resolved: set, rows: int, cols: int,
                   flagged_now: frozenset = frozenset()) -> tuple:
-    """Flag and unflag claims across replies, as {coord: [Reply, ...]}.
+    """(flags, unflags) from `collect_flag_changes`, without the ignored."""
+    return collect_flag_changes(replies, resolved, rows, cols, flagged_now)[:2]
+
+
+def collect_flag_changes(replies: list, resolved: set, rows: int, cols: int,
+                         flagged_now: frozenset = frozenset()) -> tuple:
+    """(flags, unflags, ignored) across replies.
+
+    flags and unflags are {coord: [Reply, ...]}; ignored is
+    {coord: [(Reply, wanted_flag), ...]} for requests that lost the turn's
+    first-change rule, so the people behind them can be told.
 
     A person may flag several cells in one reply — unlike voting, where they
     get one say. Cells that are already open are ignored: a flag on a revealed
@@ -249,7 +259,7 @@ def collect_flags(replies: list, resolved: set, rows: int, cols: int,
     for (_, coord), stance in latest.items():
         by_cell.setdefault(coord, []).append(stance)
 
-    flags, unflags = {}, {}
+    flags, unflags, ignored = {}, {}, {}
     for coord, stances in by_cell.items():
         stances.sort(key=lambda s: s[0])
         target = coord in flagged_now
@@ -260,7 +270,9 @@ def collect_flags(replies: list, resolved: set, rows: int, cols: int,
         for _, is_flag, reply in stances:
             if is_flag == target:
                 (flags if is_flag else unflags).setdefault(coord, []).append(reply)
-    return flags, unflags
+            else:
+                ignored.setdefault(coord, []).append((reply, is_flag))
+    return flags, unflags, ignored
 
 
 @dataclass

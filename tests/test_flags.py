@@ -277,6 +277,13 @@ class Unflagging(unittest.TestCase):
         self.assertEqual(flags, {})
         self.assertEqual([r.did for r in unflags["C3"]], ["b"])
 
+    def test_the_losing_side_is_reported_as_ignored(self):
+        replies = [reply("b", "unflag C3", "1"), reply("a", "flag C3", "2")]
+        _, _, ignored = votes.collect_flag_changes(replies, set(), 9, 9,
+                                                   frozenset({"C3"}))
+        self.assertEqual([(r.did, wanted) for r, wanted in ignored["C3"]],
+                         [("a", True)])
+
     def test_agreeing_flags_all_count(self):
         replies = [reply("a", "flag C3", "1"), reply("b", "flag C3", "2")]
         flags, _ = votes.collect_flags(replies, set(), 9, 9)
@@ -324,9 +331,29 @@ class UnflagAcknowledgement(unittest.TestCase):
         self.assertIn("C3 is flagged again", text)
         self.assertIn("D4", text)
 
+    def test_ignored_text_names_the_cell_and_says_wait(self):
+        text = main.build_ignored_flag_reply({"C3": True, "D4": False})
+        self.assertIn("C3 was already unflagged by someone else", text)
+        self.assertIn("D4 was already flagged by someone else", text)
+        self.assertIn("next turn", text)
+        self.assertLessEqual(len(text), 300)
+
+    def test_an_ignored_player_is_answered_once(self):
+        first = reply("a", "flag C3 and D4", "1")
+        later = reply("a", "flag E5", "2")
+        main._confirm_ignored_flags(self.state, {
+            "C3": [(first, True)], "D4": [(first, True)],
+            "E5": [(later, True)]})
+        self.assertEqual(len(self.sent), 1)
+        text, kw = self.sent[0]
+        self.assertEqual(kw["parent_uri"], first.uri)
+        self.assertIn("C3", text)
+
     def test_a_failed_reply_does_not_break_the_turn(self):
         main.bluesky.post_reply = lambda *a, **k: (_ for _ in ()).throw(
             RuntimeError("rate limited"))
+        main._confirm_ignored_flags(self.state,
+                                    {"C3": [(reply("a", "flag C3"), True)]})
         main._confirm_unflags(self.state, {"C3": [reply("a", "unflag C3")]})
 
     def test_the_tutorial_mentions_unflag(self):

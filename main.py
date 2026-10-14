@@ -361,6 +361,17 @@ def build_unflag_reply(cells: dict, total_flagged: int) -> str:
         tags=[config.REPLY_HASHTAG])
 
 
+def build_ignored_flag_reply(cells: dict) -> str:
+    """Say why a flag change did nothing. `cells` maps coord -> wanted a flag."""
+    parts = [f"{coord} was already {'unflagged' if wanted else 'flagged'} "
+             f"by someone else this turn"
+             for coord, wanted in sorted(cells.items())[:3]]
+    return _with_tags(
+        f"⏳ {'; '.join(parts)}. A cell's flag changes once per turn, so "
+        f"ask again next turn.",
+        tags=[config.REPLY_HASHTAG])
+
+
 def build_knockout_credit_reply(state: game.GameState, play,
                                 this_board: int, all_time: int) -> str:
     """Tell one player what their move did and what they are on.
@@ -1202,6 +1213,36 @@ def _confirm_unflags(state: game.GameState, withdrawn: dict) -> None:
             logger.exception("Failed to confirm unflag for %s", reply.handle)
 
 
+def _confirm_ignored_flags(state: game.GameState, ignored: dict) -> None:
+    """Tell each player whose flag change lost the turn, once per turn."""
+    by_player = {}
+    for coord, requests in ignored.items():
+        for reply, wanted in requests:
+            if not reply.did or not reply.uri:
+                continue
+            entry = by_player.setdefault(reply.did,
+                                         {"reply": reply, "cells": {}})
+            entry["cells"][coord] = wanted
+            if ((reply.created_at or "")
+                    < (entry["reply"].created_at or "")):
+                entry["reply"] = reply
+
+    ordered = sorted(by_player.values(),
+                     key=lambda e: e["reply"].created_at or "")
+    for entry in ordered:
+        reply = entry["reply"]
+        try:
+            uri = bluesky.post_reply(
+                build_ignored_flag_reply(entry["cells"]),
+                parent_uri=reply.uri, parent_cid=reply.cid,
+                root_uri=reply.root_uri, root_cid=reply.root_cid,
+                kind="flagignored")
+            _remember(uri, "flagignored", state.game_id, state.turn_number)
+        except Exception:
+            logger.exception("Failed to explain ignored flag for %s",
+                             reply.handle)
+
+
 def _fetch_replies(uri: str) -> list:
     if not uri:
         return []
@@ -1243,14 +1284,14 @@ def _game_tick() -> None:
     replies = _fetch_replies(state.last_post_uri)
     vote = votes.tally(replies, already_open, state.rows, state.cols)
 
-    claimed, withdrawn = votes.collect_flags(
+    claimed, withdrawn, ignored = votes.collect_flag_changes(
         replies, already_open, state.rows, state.cols,
         db.flagged_coords(state.game_id, config.FLAG_QUORUM))
     _record_flags(state, claimed, withdrawn)
 
     if config.KNOCKOUT:
         _play_knockout_turn(state, replies, already_open, position, analysis,
-                            claimed, withdrawn)
+                            claimed, withdrawn, ignored)
         return
 
     # 2. Decide. The quorum exists to stop one stray vote carrying a turn when
@@ -1388,6 +1429,8 @@ def _game_tick() -> None:
         _confirm_first_flags(state, claimed)
     if withdrawn:
         _confirm_unflags(state, withdrawn)
+    if ignored:
+        _confirm_ignored_flags(state, ignored)
 
     if not move_recorded:
         try:
@@ -1417,7 +1460,8 @@ def _game_tick() -> None:
 
 def _play_knockout_turn(state: game.GameState, replies: list,
                         already_open: set, position, analysis,
-                        claimed: dict, withdrawn: dict) -> None:
+                        claimed: dict, withdrawn: dict,
+                        ignored: dict | None = None) -> None:
     """One knockout turn: everybody eligible opens a cell of their own.
 
     Same ordering discipline as the plurality path — the move is applied in
@@ -1495,6 +1539,8 @@ def _play_knockout_turn(state: game.GameState, replies: list,
         _confirm_first_flags(state, claimed)
     if withdrawn:
         _confirm_unflags(state, withdrawn)
+    if ignored:
+        _confirm_ignored_flags(state, ignored)
 
     db.save_state(state)
 
