@@ -971,7 +971,7 @@ def _record_flags(state: game.GameState, claimed: dict, withdrawn: dict) -> None
     """Persist this turn's mine claims. Never allowed to break a turn."""
     try:
         # Withdrawals first: anyone may clear a cell, and collect_flags has
-        # already dropped any claim that a later unflag overrode.
+        # already dropped whichever side lost the turn's first-change rule.
         for coord in withdrawn:
             db.remove_flag(state.game_id, coord)
         for coord, repliers in claimed.items():
@@ -1243,8 +1243,9 @@ def _game_tick() -> None:
     replies = _fetch_replies(state.last_post_uri)
     vote = votes.tally(replies, already_open, state.rows, state.cols)
 
-    claimed, withdrawn = votes.collect_flags(replies, already_open,
-                                             state.rows, state.cols)
+    claimed, withdrawn = votes.collect_flags(
+        replies, already_open, state.rows, state.cols,
+        db.flagged_coords(state.game_id, config.FLAG_QUORUM))
     _record_flags(state, claimed, withdrawn)
 
     if config.KNOCKOUT:

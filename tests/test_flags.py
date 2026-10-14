@@ -254,17 +254,33 @@ class Unflagging(unittest.TestCase):
         self.assertEqual(flags, {})
         self.assertEqual(sorted(unflags), ["C3"])
 
-    def test_anyones_later_unflag_overrides_an_earlier_flag(self):
-        replies = [reply("a", "flag C3", "1"), reply("b", "unflag C3", "2")]
-        flags, unflags = votes.collect_flags(replies, set(), 9, 9)
+    def test_first_change_in_a_turn_holds_against_a_later_reversal(self):
+        # C3 is flagged: b unflags it first, so a's re-flag is ignored.
+        replies = [reply("b", "unflag C3", "1"), reply("a", "flag C3", "2")]
+        flags, unflags = votes.collect_flags(replies, set(), 9, 9,
+                                             frozenset({"C3"}))
         self.assertEqual(flags, {})
         self.assertEqual([r.did for r in unflags["C3"]], ["b"])
 
-    def test_a_flag_after_someone_elses_unflag_stands(self):
-        replies = [reply("b", "unflag C3", "1"), reply("a", "flag C3", "2")]
+        # C3 is clear: a flags it first, so b's unflag is ignored.
+        replies = [reply("a", "flag C3", "1"), reply("b", "unflag C3", "2")]
         flags, unflags = votes.collect_flags(replies, set(), 9, 9)
         self.assertEqual([r.did for r in flags["C3"]], ["a"])
+        self.assertEqual(unflags, {})
+
+    def test_a_request_that_changes_nothing_does_not_use_up_the_turn(self):
+        # C3 is already flagged, so a's "flag" is no change; b's unflag is
+        # the first real change and stands.
+        replies = [reply("a", "flag C3", "1"), reply("b", "unflag C3", "2")]
+        flags, unflags = votes.collect_flags(replies, set(), 9, 9,
+                                             frozenset({"C3"}))
+        self.assertEqual(flags, {})
         self.assertEqual([r.did for r in unflags["C3"]], ["b"])
+
+    def test_agreeing_flags_all_count(self):
+        replies = [reply("a", "flag C3", "1"), reply("b", "flag C3", "2")]
+        flags, _ = votes.collect_flags(replies, set(), 9, 9)
+        self.assertEqual(sorted(r.did for r in flags["C3"]), ["a", "b"])
 
 
 class UnflagAcknowledgement(unittest.TestCase):

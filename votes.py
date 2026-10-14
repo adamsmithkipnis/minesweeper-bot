@@ -221,36 +221,45 @@ def parse_flags(text: str, rows: int, cols: int) -> tuple:
     return flagged, unflagged
 
 
-def collect_flags(replies: list, resolved: set, rows: int, cols: int) -> tuple:
+def collect_flags(replies: list, resolved: set, rows: int, cols: int,
+                  flagged_now: frozenset = frozenset()) -> tuple:
     """Flag and unflag claims across replies, as {coord: [Reply, ...]}.
 
     A person may flag several cells in one reply — unlike voting, where they
     get one say. Cells that are already open are ignored: a flag on a revealed
     cell is a misreading, not a prediction.
+
+    Anyone may change any cell's flag, but only once per turn: the first
+    person to actually change it (relative to `flagged_now`, the cells
+    showing a flag on the board) decides it, and anyone asking for the
+    opposite later in the same turn is ignored until next turn.
     """
-    # The latest word on a cell wins, as with votes: "unflag C3" and then
-    # "flag C3" means flagged, not both. An unflag is not limited to your own
-    # flag — the mark on the board is shared, so anyone can take it off.
+    # A person's own latest word on a cell wins, as with votes: "unflag C3"
+    # and then "flag C3" means flagged, not both.
     latest = {}
-    last_unflag = {}
     for seq, reply in enumerate(sorted(replies,
                                        key=lambda r: r.created_at or "")):
         flagged, unflagged = parse_flags(reply.text, rows, cols)
         for coord in flagged - resolved:
-            latest[(reply.did, coord)] = (True, reply, seq)
+            latest[(reply.did, coord)] = (seq, True, reply)
         for coord in unflagged - resolved - flagged:
-            latest[(reply.did, coord)] = (False, reply, seq)
-            last_unflag[coord] = seq
+            latest[(reply.did, coord)] = (seq, False, reply)
+
+    by_cell = {}
+    for (_, coord), stance in latest.items():
+        by_cell.setdefault(coord, []).append(stance)
 
     flags, unflags = {}, {}
-    for (_, coord), (is_flag, reply, seq) in latest.items():
-        if is_flag:
-            # Overridden by a later unflag from anyone.
-            if last_unflag.get(coord, -1) > seq:
-                continue
-            flags.setdefault(coord, []).append(reply)
-        else:
-            unflags.setdefault(coord, []).append(reply)
+    for coord, stances in by_cell.items():
+        stances.sort(key=lambda s: s[0])
+        target = coord in flagged_now
+        for _, is_flag, _ in stances:
+            if is_flag != (coord in flagged_now):
+                target = is_flag
+                break
+        for _, is_flag, reply in stances:
+            if is_flag == target:
+                (flags if is_flag else unflags).setdefault(coord, []).append(reply)
     return flags, unflags
 
 
