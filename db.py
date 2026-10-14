@@ -588,12 +588,16 @@ def add_flag(game_id: int, coord: str, did: str, handle: str,
             (game_id, coord, did, handle, turn_number))
 
 
-def remove_flag(game_id: int, coord: str, did: str) -> None:
-    """Take back an unresolved claim. A scored one stays on the record."""
+def remove_flag(game_id: int, coord: str) -> None:
+    """Take the flag off a cell, whoever put it there.
+
+    The mark on the board is shared, so anyone may clear it: every unresolved
+    claim on the cell goes. Scored claims stay on the record.
+    """
     with _connect() as conn:
         conn.execute(
-            "DELETE FROM flags WHERE game_id = ? AND coord = ? AND did = ? "
-            "AND correct IS NULL", (game_id, coord, did))
+            "DELETE FROM flags WHERE game_id = ? AND coord = ? "
+            "AND correct IS NULL", (game_id, coord))
 
 
 def flagged_coords(game_id: int, quorum: int = 1) -> set:

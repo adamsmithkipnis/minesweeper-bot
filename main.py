@@ -341,9 +341,9 @@ def build_flag_reply(coords: list, total_flagged: int) -> str:
 def build_unflag_reply(cells: dict, total_flagged: int) -> str:
     """Acknowledge an unflag, and be honest when the flag stays up.
 
-    Flags are one mark per cell on the board but one claim per person, so
-    taking yours back only clears the cell if nobody else flagged it. `cells`
-    maps each coordinate to how many *other* people still have it flagged.
+    Anyone may clear any flag, so a cell only stays up if somebody flagged it
+    again after the unflag. `cells` maps each coordinate to how many people
+    have it flagged now.
     """
     shown = sorted(cells)[:3]
     cleared = [c for c in shown if not cells[c]]
@@ -353,8 +353,8 @@ def build_unflag_reply(cells: dict, total_flagged: int) -> str:
         parts.append(f"{', '.join(cleared)} "
                      f"{'is' if len(cleared) == 1 else 'are'} off the board")
     for coord in kept:
-        parts.append(f"{coord} stays flagged — "
-                     f"{_plural(cells[coord], 'other player')} flagged it too")
+        parts.append(f"{coord} is flagged again — "
+                     f"{_plural(cells[coord], 'player')} flagged it after")
     return _with_tags(
         f"🏳️ Unflagged. {'; '.join(parts)}.\n\n"
         f"{_plural(total_flagged, 'cell')} flagged now.",
@@ -970,13 +970,14 @@ def build_knockout_gameover_text(state: game.GameState, record: dict,
 def _record_flags(state: game.GameState, claimed: dict, withdrawn: dict) -> None:
     """Persist this turn's mine claims. Never allowed to break a turn."""
     try:
+        # Withdrawals first: anyone may clear a cell, and collect_flags has
+        # already dropped any claim that a later unflag overrode.
+        for coord in withdrawn:
+            db.remove_flag(state.game_id, coord)
         for coord, repliers in claimed.items():
             for reply in repliers:
                 db.add_flag(state.game_id, coord, reply.did, reply.handle,
                             state.turn_number)
-        for coord, repliers in withdrawn.items():
-            for reply in repliers:
-                db.remove_flag(state.game_id, coord, reply.did)
         if claimed or withdrawn:
             logger.info("Flags: %d claimed, %d withdrawn",
                         sum(len(v) for v in claimed.values()),

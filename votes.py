@@ -228,19 +228,29 @@ def collect_flags(replies: list, resolved: set, rows: int, cols: int) -> tuple:
     get one say. Cells that are already open are ignored: a flag on a revealed
     cell is a misreading, not a prediction.
     """
-    # The latest word from each person on each cell wins, as with votes:
-    # "unflag C3" and then "flag C3" means flagged, not both.
+    # The latest word on a cell wins, as with votes: "unflag C3" and then
+    # "flag C3" means flagged, not both. An unflag is not limited to your own
+    # flag — the mark on the board is shared, so anyone can take it off.
     latest = {}
-    for reply in sorted(replies, key=lambda r: r.created_at or ""):
+    last_unflag = {}
+    for seq, reply in enumerate(sorted(replies,
+                                       key=lambda r: r.created_at or "")):
         flagged, unflagged = parse_flags(reply.text, rows, cols)
         for coord in flagged - resolved:
-            latest[(reply.did, coord)] = (True, reply)
+            latest[(reply.did, coord)] = (True, reply, seq)
         for coord in unflagged - resolved - flagged:
-            latest[(reply.did, coord)] = (False, reply)
+            latest[(reply.did, coord)] = (False, reply, seq)
+            last_unflag[coord] = seq
 
     flags, unflags = {}, {}
-    for (_, coord), (is_flag, reply) in latest.items():
-        (flags if is_flag else unflags).setdefault(coord, []).append(reply)
+    for (_, coord), (is_flag, reply, seq) in latest.items():
+        if is_flag:
+            # Overridden by a later unflag from anyone.
+            if last_unflag.get(coord, -1) > seq:
+                continue
+            flags.setdefault(coord, []).append(reply)
+        else:
+            unflags.setdefault(coord, []).append(reply)
     return flags, unflags
 
 

@@ -90,8 +90,15 @@ class Scoring(unittest.TestCase):
 
     def test_unflagging_removes_it(self):
         db.add_flag(1, "C3", "did:a", "a", 1)
-        db.remove_flag(1, "C3", "did:a")
+        db.remove_flag(1, "C3")
         self.assertEqual(db.flag_counts(1), {})
+
+    def test_anyone_can_clear_a_flag_someone_else_placed(self):
+        db.add_flag(1, "C3", "did:a", "a", 1)
+        db.add_flag(1, "C3", "did:b", "b", 1)
+        db.add_flag(1, "D4", "did:a", "a", 1)
+        db.remove_flag(1, "C3")
+        self.assertEqual(db.flag_counts(1), {"D4": 1})
 
     def test_scoring_marks_right_and_wrong(self):
         db.add_flag(1, "C3", "did:a", "a", 1)      # really a mine
@@ -115,7 +122,7 @@ class Scoring(unittest.TestCase):
     def test_a_resolved_claim_cannot_be_withdrawn(self):
         db.add_flag(1, "C3", "did:a", "a", 1)
         db.resolve_flags(1, {"C3": True})
-        db.remove_flag(1, "C3", "did:a")
+        db.remove_flag(1, "C3")
         self.assertEqual(db.flag_scores(1)[0]["total"], 1)
 
     def test_boards_are_scored_separately(self):
@@ -166,7 +173,7 @@ class FirstFlagTutorial(unittest.TestCase):
     def test_withdrawing_a_flag_does_not_make_the_tutorial_repeat(self):
         self.assertTrue(db.claim_flag_tutorial("did:a"))
         db.add_flag(1, "C3", "did:a", "a", 1)
-        db.remove_flag(1, "C3", "did:a")
+        db.remove_flag(1, "C3")
         self.assertFalse(db.claim_flag_tutorial("did:a"))
 
     def test_a_failed_reply_can_be_retried_on_the_next_flag(self):
@@ -247,8 +254,14 @@ class Unflagging(unittest.TestCase):
         self.assertEqual(flags, {})
         self.assertEqual(sorted(unflags), ["C3"])
 
-    def test_one_persons_unflag_does_not_cancel_anothers_flag(self):
+    def test_anyones_later_unflag_overrides_an_earlier_flag(self):
         replies = [reply("a", "flag C3", "1"), reply("b", "unflag C3", "2")]
+        flags, unflags = votes.collect_flags(replies, set(), 9, 9)
+        self.assertEqual(flags, {})
+        self.assertEqual([r.did for r in unflags["C3"]], ["b"])
+
+    def test_a_flag_after_someone_elses_unflag_stands(self):
+        replies = [reply("b", "unflag C3", "1"), reply("a", "flag C3", "2")]
         flags, unflags = votes.collect_flags(replies, set(), 9, 9)
         self.assertEqual([r.did for r in flags["C3"]], ["a"])
         self.assertEqual([r.did for r in unflags["C3"]], ["b"])
@@ -277,11 +290,11 @@ class UnflagAcknowledgement(unittest.TestCase):
         self.assertIn("4 cells flagged now", text)
         self.assertLessEqual(len(text), 300)
 
-    def test_text_is_honest_when_someone_else_still_has_it_flagged(self):
+    def test_text_is_honest_when_the_cell_was_flagged_again(self):
         text = main.build_unflag_reply({"C3": 1, "D4": 0}, 2)
         self.assertIn("D4 is off the board", text)
-        self.assertIn("C3 stays flagged", text)
-        self.assertIn("1 other player flagged it too", text)
+        self.assertIn("C3 is flagged again", text)
+        self.assertIn("1 player flagged it after", text)
 
     def test_a_player_is_answered_once_however_many_cells_they_clear(self):
         db.add_flag(self.state.game_id, "C3", "did:other", "other", 1)
@@ -292,7 +305,7 @@ class UnflagAcknowledgement(unittest.TestCase):
         self.assertEqual(len(self.sent), 1)
         text, kw = self.sent[0]
         self.assertEqual(kw["parent_uri"], first.uri)
-        self.assertIn("C3 stays flagged", text)
+        self.assertIn("C3 is flagged again", text)
         self.assertIn("D4", text)
 
     def test_a_failed_reply_does_not_break_the_turn(self):
