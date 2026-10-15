@@ -215,6 +215,17 @@ def post_reply(text: str, parent_uri: str, parent_cid: str,
 # Reading replies
 # ---------------------------------------------------------------------------
 
+def get_profile_counts() -> dict | None:
+    """{'followers', 'follows', 'posts'} for the bot's account, or None in a
+    dry run, where there is no network to ask."""
+    if _dry():
+        return None
+    profile = _client.app.bsky.actor.get_profile({"actor": _client.me.did})
+    return {"followers": profile.followers_count or 0,
+            "follows": profile.follows_count or 0,
+            "posts": profile.posts_count or 0}
+
+
 def own_did() -> str:
     """The bot's own DID, or '' when there is no login (dry runs)."""
     return "" if _dry() else (getattr(_client.me, "did", "") or "")

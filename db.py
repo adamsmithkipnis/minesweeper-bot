@@ -133,6 +133,16 @@ CREATE TABLE IF NOT EXISTS notices (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- The account's follower count over time, for the owner's own records.
+-- Deliberately not cleared by reset_all: it describes the account, not a game.
+CREATE TABLE IF NOT EXISTS follower_counts (
+    id INTEGER PRIMARY KEY,
+    followers INTEGER,
+    follows INTEGER,
+    posts INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP   -- UTC
+);
+
 -- Every post the bot creates, so a reset deletes exactly the bot's own posts
 -- instead of indiscriminately emptying the account.
 CREATE TABLE IF NOT EXISTS posts (
@@ -586,6 +596,25 @@ def release_flag_tutorial(did: str) -> None:
         return
     with _connect() as conn:
         conn.execute("DELETE FROM flag_tutorials WHERE did = ?", (did,))
+
+def record_followers(followers: int, follows: int | None = None,
+                     posts: int | None = None) -> None:
+    """Append one reading of the account's follower count."""
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO follower_counts (followers, follows, posts) "
+            "VALUES (?, ?, ?)", (followers, follows, posts))
+
+
+def follower_history(since: str | None = None) -> list:
+    """Readings oldest first: [{created_at (UTC), followers, follows, posts}]."""
+    where, params = ("WHERE created_at >= ?", [since]) if since else ("", [])
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT created_at, followers, follows, posts "
+            f"FROM follower_counts {where} ORDER BY id", params).fetchall()
+    return [dict(r) for r in rows]
+
 
 def claim_notice(reply_uri: str, kind: str) -> bool:
     """Reserve the one explanation owed to a reply. False if already given."""

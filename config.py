@@ -189,6 +189,10 @@ if not HASHTAG_POOL:        # no file and no override: stay findable anyway
 MILESTONES = sorted(int(n) for n in os.environ.get(
     "MILESTONES", "100 500 1000 2500 5000 10000 25000 50000").split())
 
+# How often to record the account's follower count, in minutes. 0 turns the
+# history off. It is a record for the owner, never posted anywhere.
+FOLLOWER_SNAPSHOT_MINUTES = int(os.environ.get("FOLLOWER_SNAPSHOT_MINUTES", "60"))
+
 # The weekly standings post. Day names are APScheduler's (mon..sun) and the
 # hour is local to LEADERBOARD_TZ, so the post keeps its wall-clock slot
 # across a daylight-saving change instead of drifting an hour.

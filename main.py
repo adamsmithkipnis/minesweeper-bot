@@ -1796,6 +1796,28 @@ def leaderboard_due(now: datetime | None = None) -> bool:
     return last < previous_slot(now)
 
 
+def snapshot_followers() -> None:
+    """Record the follower count. Never raises: a missed reading is only a gap."""
+    try:
+        counts = bluesky.get_profile_counts()
+        if counts is None:
+            return
+        db.record_followers(counts["followers"], counts["follows"],
+                            counts["posts"])
+        logger.info("Followers: %d", counts["followers"])
+    except Exception:
+        logger.exception("Failed to record the follower count")
+
+
+def print_follower_history() -> None:
+    """The history as CSV on stdout, timestamps in UTC."""
+    print("created_at_utc,followers,follows,posts")
+    for row in db.follower_history():
+        print(f"{row['created_at']},{row['followers']},"
+              f"{'' if row['follows'] is None else row['follows']},"
+              f"{'' if row['posts'] is None else row['posts']}")
+
+
 def weekly_leaderboard(now: datetime | None = None) -> str:
     """Post the standings: top of the week, and top of all time."""
     now = (now or datetime.now(timezone.utc)).astimezone(_leaderboard_tz())
@@ -1845,7 +1867,15 @@ def main() -> None:
                              "starting the scheduler")
     parser.add_argument("--leaderboard", action="store_true",
                         help="post the weekly standings now and exit")
+    parser.add_argument("--followers", action="store_true",
+                        help="print the recorded follower history as CSV "
+                             "and exit")
     args = parser.parse_args()
+
+    if args.followers:
+        db.init_db()
+        print_follower_history()
+        return
 
     setup_logging()
     mode = (f"knockout, elimination {config.ELIMINATION_TURNS} turns"
@@ -1879,6 +1909,15 @@ def main() -> None:
                       misfire_grace_time=config.TURN_MINUTES * 60)
     logger.info("Scheduler started; one turn every %d minutes, next at %s",
                 config.TURN_MINUTES, first.astimezone().strftime("%H:%M:%S %Z"))
+
+    if config.FOLLOWER_SNAPSHOT_MINUTES > 0:
+        scheduler.add_job(snapshot_followers, "interval",
+                          minutes=config.FOLLOWER_SNAPSHOT_MINUTES,
+                          next_run_time=datetime.now(timezone.utc),
+                          id="follower_snapshot", coalesce=True,
+                          max_instances=1, misfire_grace_time=600)
+        logger.info("Recording followers every %d minutes",
+                    config.FOLLOWER_SNAPSHOT_MINUTES)
 
     if config.WEEKLY_LEADERBOARD:
         scheduler.add_job(post_weekly_leaderboard, "cron",

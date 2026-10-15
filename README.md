@@ -351,6 +351,17 @@ from Bluesky's public AppView with no credentials.
 both fleets; this one is worse, because it shows the solver's answers to the
 board that is currently being played.
 
+## Follower history
+
+The bot records the account's follower count (with follows and post count)
+into the `follower_counts` table every `FOLLOWER_SNAPSHOT_MINUTES` (default 60,
+0 disables), including once at startup. It is never posted, and `reset.py`
+leaves it alone. Export it as CSV, timestamps in UTC:
+
+```bash
+.venv/bin/python main.py --followers > followers.csv
+```
+
 ## Notes for anyone changing this
 
 - **Facet ranges are UTF-8 byte offsets**, not character offsets, and the post
