@@ -423,6 +423,23 @@ def build_duplicate_skip_reply(state: game.GameState, move) -> str:
         tags=[config.REPLY_HASHTAG])
 
 
+def build_open_cell_reply(coord: str) -> str:
+    """Say why a vote for an already-open cell was not counted."""
+    return _with_tags(
+        f"🧭 {coord} is already open, so that vote can't count. Pick a "
+        f"hidden cell (a ? on the board) and reply again on the newest "
+        f"board post.",
+        tags=[config.REPLY_HASHTAG])
+
+
+def build_stale_post_reply() -> str:
+    """Say that replies to an earlier turn's post are not read."""
+    return _with_tags(
+        "⏰ This is an earlier turn's post, and I only read replies to the "
+        "newest board post, so this didn't count. Reply there to play.",
+        tags=[config.REPLY_HASHTAG])
+
+
 def build_credit_reply(state: game.GameState, coord: str, vote,
                        points: int = 0, this_game: int = 0,
                        all_time: int = 0) -> str:
@@ -1090,6 +1107,97 @@ def _notify_duplicate_skips(state: game.GameState, moves: list) -> None:
                              move.handle)
 
 
+_NOTICE_LIMIT = 10      # explanations per tick, so one thread can't flood
+_STALE_LOOKBACK = 4     # earlier board posts re-read for late replies
+
+
+def _send_notice(state: game.GameState, reply, text: str, kind: str) -> bool:
+    """Answer one reply, once. Claim first, release if the post fails."""
+    if not reply.uri or not db.claim_notice(reply.uri, kind):
+        return False
+    try:
+        uri = bluesky.post_reply(
+            text, parent_uri=reply.uri, parent_cid=reply.cid,
+            root_uri=reply.root_uri, root_cid=reply.root_cid, kind=kind)
+    except Exception:
+        db.release_notice(reply.uri)
+        logger.exception("Failed to explain a %s notice to %s", kind,
+                         reply.handle)
+        return False
+    _remember(uri, kind, state.game_id, state.turn_number)
+    return True
+
+
+def _notify_open_cell_votes(state: game.GameState, replies: list,
+                            already_open: set, budget: int) -> int:
+    """Tell players whose only vote named a cell that is already open."""
+    sent = 0
+    for reply, coord in votes.unplayable_votes(replies, already_open,
+                                               state.rows, state.cols):
+        if sent >= budget:
+            break
+        if _send_notice(state, reply, build_open_cell_reply(coord), "opencell"):
+            sent += 1
+    return sent
+
+
+def _as_utc(value: str):
+    """An ISO or SQLite timestamp as an aware UTC datetime, or None."""
+    try:
+        parsed = datetime.fromisoformat((value or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _notify_stale_post_replies(state: game.GameState, budget: int) -> int:
+    """Tell players who replied to a turn post after a newer one went up.
+
+    Only the newest board post is read for votes, so those replies were
+    never going to count. A reply sent before its successor was posted is
+    left alone: it was on the live post when it was written.
+    """
+    boards = [p for p in db.get_posts(state.game_id)
+              if p["kind"] in ("turn", "newgame")]     # newest first
+    uris = [p["uri"] for p in boards]
+    if state.last_post_uri not in uris:
+        return 0
+    me, sent = bluesky.own_did(), 0
+    start = uris.index(state.last_post_uri)
+    for i in range(start + 1, min(len(boards), start + 1 + _STALE_LOOKBACK)):
+        went_stale = _as_utc(boards[i - 1]["created_at"])
+        if went_stale is None:
+            continue
+        try:
+            replies = bluesky.get_replies(boards[i]["uri"])
+        except Exception:
+            logger.exception("Failed to read old post %s", boards[i]["uri"])
+            continue
+        for reply in sorted(replies, key=lambda r: r.created_at or ""):
+            if sent >= budget:
+                return sent
+            when = _as_utc(reply.created_at)
+            if (reply.did == me or when is None or when <= went_stale
+                    or not votes.is_actionable(reply.text, state.rows,
+                                               state.cols)):
+                continue
+            if _send_notice(state, reply, build_stale_post_reply(), "stalepost"):
+                sent += 1
+    return sent
+
+
+def _explain_uncounted_replies(state: game.GameState, replies: list,
+                               already_open: set) -> None:
+    """Best-effort: never let an explanation get in the way of the turn."""
+    try:
+        left = _NOTICE_LIMIT - _notify_open_cell_votes(
+            state, replies, already_open, _NOTICE_LIMIT)
+        if left > 0:
+            _notify_stale_post_replies(state, left)
+    except Exception:
+        logger.exception("Failed to explain uncounted replies")
+
+
 def _announce_milestones(state: game.GameState, movers: list) -> None:
     """One celebration post for everybody who passed a rung this turn.
 
@@ -1283,6 +1391,8 @@ def _game_tick() -> None:
     already_open = {game.index_to_coord(r, c) for (r, c) in state.revealed}
     replies = _fetch_replies(state.last_post_uri)
     vote = votes.tally(replies, already_open, state.rows, state.cols)
+
+    _explain_uncounted_replies(state, replies, already_open)
 
     claimed, withdrawn, ignored = votes.collect_flag_changes(
         replies, already_open, state.rows, state.cols,

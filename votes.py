@@ -322,6 +322,36 @@ def collect(replies: list, unavailable: set, rows: int, cols: int) -> tuple:
     return votes, first
 
 
+def unplayable_votes(replies: list, unavailable: set, rows: int,
+                     cols: int) -> list:
+    """[(reply, coord)] for players whose votes all named an open cell.
+
+    `collect` drops those votes silently, which from the outside looks like
+    being ignored. A player with another, valid vote this turn is left out:
+    their say still counts, so there is nothing to explain. One entry per
+    account, their latest dead vote.
+    """
+    ordered = sorted(replies, key=lambda r: r.created_at or "")
+    dead, alive = {}, set()
+    for reply in ordered:
+        coord = parse_vote(reply.text, rows, cols)
+        if coord is None:
+            continue
+        if coord in unavailable:
+            dead[reply.did] = (reply, coord)
+        else:
+            alive.add(reply.did)
+    return [pair for did, pair in dead.items() if did not in alive]
+
+
+def is_actionable(text: str, rows: int, cols: int) -> bool:
+    """Whether a reply tried to vote or flag, as opposed to just chatting."""
+    if parse_vote(text, rows, cols) is not None:
+        return True
+    flagged, unflagged = parse_flags(text, rows, cols)
+    return bool(flagged or unflagged)
+
+
 @dataclass
 class Move:
     """One player's action for a turn."""

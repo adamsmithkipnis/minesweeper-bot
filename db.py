@@ -123,6 +123,16 @@ CREATE TABLE IF NOT EXISTS milestones (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_milestones_once
     ON milestones (did, threshold);
 
+-- Replies the bot has already explained itself to (a vote for an open cell,
+-- a reply to an old turn post). Claimed before the answer goes out and
+-- released if it fails, so nobody is told twice however often a tick re-reads
+-- the same thread.
+CREATE TABLE IF NOT EXISTS notices (
+    reply_uri TEXT PRIMARY KEY,
+    kind TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Every post the bot creates, so a reset deletes exactly the bot's own posts
 -- instead of indiscriminately emptying the account.
 CREATE TABLE IF NOT EXISTS posts (
@@ -577,6 +587,25 @@ def release_flag_tutorial(did: str) -> None:
     with _connect() as conn:
         conn.execute("DELETE FROM flag_tutorials WHERE did = ?", (did,))
 
+def claim_notice(reply_uri: str, kind: str) -> bool:
+    """Reserve the one explanation owed to a reply. False if already given."""
+    if not reply_uri:
+        return False
+    with _connect() as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO notices (reply_uri, kind) VALUES (?, ?)",
+            (reply_uri, kind))
+        return cur.rowcount == 1
+
+
+def release_notice(reply_uri: str) -> None:
+    """Let a failed explanation be attempted again on the next tick."""
+    if not reply_uri:
+        return
+    with _connect() as conn:
+        conn.execute("DELETE FROM notices WHERE reply_uri = ?", (reply_uri,))
+
+
 def add_flag(game_id: int, coord: str, did: str, handle: str,
              turn_number: int) -> None:
     """Record one person's claim that `coord` holds a mine. Idempotent."""
@@ -774,6 +803,7 @@ def reset_all(keep_record: bool = False) -> None:
             conn.execute("DELETE FROM moves")
             conn.execute("DELETE FROM flags")
             conn.execute("DELETE FROM flag_tutorials")
+            conn.execute("DELETE FROM notices")
             conn.execute("DELETE FROM eliminations")
             # Points go with the moves, so the milestones they earned have to
             # go too, or nobody can ever reach their first hundred again.

@@ -215,6 +215,11 @@ def post_reply(text: str, parent_uri: str, parent_cid: str,
 # Reading replies
 # ---------------------------------------------------------------------------
 
+def own_did() -> str:
+    """The bot's own DID, or '' when there is no login (dry runs)."""
+    return "" if _dry() else (getattr(_client.me, "did", "") or "")
+
+
 def get_replies(post_uri: str) -> list:
     """Direct replies to a post, as votes.Reply records."""
     if _dry() or not post_uri:
