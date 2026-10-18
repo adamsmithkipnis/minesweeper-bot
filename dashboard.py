@@ -288,10 +288,10 @@ TEMPLATE = """
       {% endif %}
       {% if board.flag_scores %}
       <table>
-        <tr><th>Flagger</th><th>Right</th><th>Scored</th></tr>
+        <tr><th>Flagger</th><th>Points</th><th>Right</th><th>Scored</th></tr>
         {% for row in board.flag_scores %}
-        <tr><td>{{ row.handle }}</td><td class="ok">{{ row.hits }}</td>
-            <td>{{ row.total }}</td></tr>
+        <tr><td>{{ row.handle }}</td><td>{{ row.points }}</td>
+            <td class="ok">{{ row.hits }}</td><td>{{ row.total }}</td></tr>
         {% endfor %}
       </table>
       {% endif %}

@@ -581,3 +581,37 @@ def explain(position: Position, cell: tuple,
     # 3. Only enumeration shows it.
     return (f"Every way the remaining mines can fit the numbers leaves "
             f"{coord} clear.")
+
+
+def flag_assists(position: Position, opened: tuple, flags_by_did: dict) -> dict:
+    """Whose flags made `opened` provably safe: {did: [flag coords]}.
+
+    Credit goes through a revealed number next to the opened cell whose
+    remaining mines are exactly accounted for by that person's flags among
+    its hidden neighbours. It reads only the position and the claims — the
+    same information every follower has — so it can run before the cell is
+    opened, and a wrong flag earns the credit just as readily as a right one.
+    That is on purpose: the assist is paid at board end, and only once every
+    flag behind it has been proved.
+    """
+    rows, cols = position.rows, position.cols
+    out = {}
+    if opened in position.revealed or opened in position.spent:
+        return out
+    for number_cell in neighbors(opened[0], opened[1], rows, cols):
+        if number_cell not in position.revealed:
+            continue
+        around = neighbors(number_cell[0], number_cell[1], rows, cols)
+        remaining = position.revealed[number_cell] - sum(
+            1 for n in around if n in position.spent)
+        if remaining <= 0:
+            continue
+        hidden = [n for n in around
+                  if n not in position.revealed and n not in position.spent]
+        for did, flagged in flags_by_did.items():
+            mine_flags = [index_to_coord(*n) for n in hidden
+                          if index_to_coord(*n) in flagged]
+            if len(mine_flags) == remaining and opened not in {
+                    n for n in hidden if index_to_coord(*n) in flagged}:
+                out.setdefault(did, set()).update(mine_flags)
+    return {did: sorted(coords) for did, coords in out.items()}

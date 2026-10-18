@@ -108,6 +108,47 @@ class MovesTable(unittest.TestCase):
             config.DB_PATH = old
 
 
+class FlagBets(unittest.TestCase):
+    """The flags table as it stood before claims were scored as bets: no
+    withdrawal column, and a plain unique index that would stop a fresh bet
+    on a cell after a withdrawn one."""
+
+    LEGACY = (
+        "CREATE TABLE flags (id INTEGER PRIMARY KEY, game_id INTEGER,"
+        " coord TEXT, did TEXT, handle TEXT, turn_number INTEGER,"
+        " correct INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);"
+        "CREATE UNIQUE INDEX idx_flags_one_per_person"
+        " ON flags (game_id, coord, did);"
+        "INSERT INTO flags (game_id, coord, did, handle, turn_number)"
+        " VALUES (1, 'C3', 'did:a', 'a', 1);"
+    )
+
+    def setUp(self):
+        self._old = config.DB_PATH
+        config.DB_PATH = os.path.join(tempfile.mkdtemp(), "legacy_bets.db")
+        conn = sqlite3.connect(config.DB_PATH)
+        conn.executescript(self.LEGACY)
+        conn.commit(); conn.close()
+        db.init_db()
+
+    def tearDown(self):
+        config.DB_PATH = self._old
+
+    def test_an_old_claim_still_shows_and_scores(self):
+        self.assertEqual(db.flag_counts(1), {"C3": 1})
+        db.resolve_flags(1, {"C3": True})
+        self.assertEqual(db.flag_points("did:a", 1), 1)
+
+    def test_a_withdrawn_claim_can_be_placed_again(self):
+        db.withdraw_flag(1, "C3", "did:a", 1)
+        self.assertTrue(db.add_flag(1, "C3", "did:a", "a", 2),
+                        "the old one-row-per-cell index must be gone")
+
+    def test_migrating_twice_is_harmless(self):
+        db.init_db()
+        self.assertEqual(db.flag_counts(1), {"C3": 1})
+
+
 class FlagTutorialTable(unittest.TestCase):
     def test_existing_flaggers_are_backfilled_as_experienced_players(self):
         old = config.DB_PATH

@@ -70,6 +70,13 @@ CREATE TABLE IF NOT EXISTS moves (
 -- Crowd mine-claims. Flagging costs no turn, so this is a parallel record to
 -- moves: several people may flag the same cell, and each claim is scored on
 -- its own once the cell is resolved.
+--
+-- A claim is a bet: +1 when the cell turns out to be a mine, -1 when it does
+-- not. It can be taken back for nothing on the turn it was placed, and for
+-- the same -1 as being wrong on any later turn — otherwise flagging on a
+-- hunch and withdrawing once the neighbours disprove it would be free money.
+-- The pennant on the board is shared and anyone may clear it (`shown`), but
+-- that only hides the mark; it does not touch anybody else's bet.
 CREATE TABLE IF NOT EXISTS flags (
     id INTEGER PRIMARY KEY,
     game_id INTEGER,
@@ -78,11 +85,29 @@ CREATE TABLE IF NOT EXISTS flags (
     handle TEXT,
     turn_number INTEGER,
     correct INTEGER,          -- NULL until the cell is opened or the board ends
+    withdrawn_turn INTEGER,   -- NULL while the claim stands
+    shown INTEGER DEFAULT 1,  -- 0 once somebody cleared the pennant
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_flags_one_per_person
-    ON flags (game_id, coord, did);
+-- One standing claim per person per cell. A withdrawn claim keeps its row
+-- (and its penalty), so flagging the cell again starts a fresh bet.
+DROP INDEX IF EXISTS idx_flags_one_per_person;
+
+-- Somebody's flags made a cell provably safe and somebody opened it. Paid
+-- at board end, and only if every flag behind it was right. Keyed on the
+-- opened cell so a replayed turn cannot credit the same assist twice.
+CREATE TABLE IF NOT EXISTS assists (
+    id INTEGER PRIMARY KEY,
+    game_id INTEGER,
+    did TEXT,
+    handle TEXT,
+    coord TEXT,               -- the cell that was opened
+    flag_coords TEXT,         -- the flags that made it safe, space-separated
+    turn_number INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (game_id, did, coord)
+);
 
 -- Players who have already received the one-time flag tutorial. This is
 -- separate from flags because an unresolved claim can be withdrawn and
@@ -172,6 +197,10 @@ _ADDED_COLUMNS = {
         ("detonations", "INTEGER DEFAULT 0"),
         ("spent_mines", "TEXT"),
     ],
+    "flags": [
+        ("withdrawn_turn", "INTEGER"),
+        ("shown", "INTEGER DEFAULT 1"),
+    ],
 }
 
 
@@ -218,6 +247,11 @@ def init_db() -> None:
         ).fetchone() is not None
         conn.executescript(_SCHEMA)
         _migrate(conn)
+        # After the migration, because the index needs the columns it adds.
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_flags_one_standing_claim "
+            "ON flags (game_id, coord, did) "
+            "WHERE correct IS NULL AND withdrawn_turn IS NULL")
         if not had_flag_tutorials:
             # Existing flaggers are experienced users. Backfill them once on
             # migration so deploying this feature does not tutorial-spam the
@@ -636,53 +670,100 @@ def release_notice(reply_uri: str) -> None:
 
 
 def add_flag(game_id: int, coord: str, did: str, handle: str,
-             turn_number: int) -> None:
-    """Record one person's claim that `coord` holds a mine. Idempotent."""
+             turn_number: int) -> bool:
+    """Record one person's claim that `coord` holds a mine.
+
+    Returns True if this placed a new bet. Repeating a standing claim only
+    puts the pennant back if somebody had cleared it, and costs nothing — so
+    it does not count against the per-turn cap either.
+    """
     with _connect() as conn:
-        conn.execute(
+        cur = conn.execute(
             """INSERT OR IGNORE INTO flags
                (game_id, coord, did, handle, turn_number)
                VALUES (?, ?, ?, ?, ?)""",
             (game_id, coord, did, handle, turn_number))
+        if cur.rowcount:
+            return True
+        conn.execute(
+            "UPDATE flags SET shown = 1 WHERE game_id = ? AND coord = ? "
+            "AND did = ? AND correct IS NULL AND withdrawn_turn IS NULL",
+            (game_id, coord, did))
+        return False
 
 
 def remove_flag(game_id: int, coord: str) -> None:
-    """Take the flag off a cell, whoever put it there.
+    """Take the pennant off a cell, whoever put it there.
 
-    The mark on the board is shared, so anyone may clear it: every unresolved
-    claim on the cell goes. Scored claims stay on the record.
+    The mark on the board is shared, so anyone may clear it. The bets behind
+    it are personal and stay standing: Bob disagreeing with Alice does not
+    cancel Alice's claim, and it cannot let her dodge a wrong one either.
     """
     with _connect() as conn:
         conn.execute(
-            "DELETE FROM flags WHERE game_id = ? AND coord = ? "
-            "AND correct IS NULL", (game_id, coord))
+            "UPDATE flags SET shown = 0 WHERE game_id = ? AND coord = ? "
+            "AND correct IS NULL AND withdrawn_turn IS NULL", (game_id, coord))
+
+
+def withdraw_flag(game_id: int, coord: str, did: str, turn_number: int) -> bool:
+    """Take back one person's own standing claim. Scored claims are final.
+
+    The row stays, with the turn it was withdrawn on: same turn as placed is
+    free, any later turn is scored like a wrong flag. Returns True if there
+    was a standing claim to withdraw.
+    """
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE flags SET withdrawn_turn = ? WHERE game_id = ? "
+            "AND coord = ? AND did = ? AND correct IS NULL "
+            "AND withdrawn_turn IS NULL",
+            (turn_number, game_id, coord, did))
+        return bool(cur.rowcount)
+
+
+_STANDING = "correct IS NULL AND withdrawn_turn IS NULL"
 
 
 def flagged_coords(game_id: int, quorum: int = 1) -> set:
-    """Cells currently carrying at least `quorum` unresolved flags."""
+    """Cells currently showing at least `quorum` flags."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT coord, COUNT(*) n FROM flags "
-            "WHERE game_id = ? AND correct IS NULL GROUP BY coord "
-            "HAVING n >= ?", (game_id, quorum)).fetchall()
+            f"SELECT coord, COUNT(*) n FROM flags "
+            f"WHERE game_id = ? AND {_STANDING} AND shown = 1 "
+            f"GROUP BY coord HAVING n >= ?", (game_id, quorum)).fetchall()
     return {row["coord"] for row in rows}
 
 
 def flag_counts(game_id: int) -> dict:
-    """{coord: number of people who flagged it}, unresolved only."""
+    """{coord: number of people showing a flag on it}."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT coord, COUNT(*) n FROM flags "
-            "WHERE game_id = ? AND correct IS NULL GROUP BY coord",
+            f"SELECT coord, COUNT(*) n FROM flags "
+            f"WHERE game_id = ? AND {_STANDING} AND shown = 1 GROUP BY coord",
             (game_id,)).fetchall()
     return {row["coord"]: row["n"] for row in rows}
+
+
+def standing_flags(game_id: int) -> dict:
+    """Every standing bet, shown or not: {did: {"handle": ..., "coords": set}}."""
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT did, handle, coord FROM flags "
+            f"WHERE game_id = ? AND {_STANDING} AND did != ''",
+            (game_id,)).fetchall()
+    out = {}
+    for r in rows:
+        entry = out.setdefault(r["did"], {"handle": r["handle"], "coords": set()})
+        entry["coords"].add(r["coord"])
+    return out
 
 
 def resolve_flags(game_id: int, coords: dict) -> int:
     """Score claims now that the truth is known.
 
     `coords` maps a coordinate to whether it actually held a mine. Only
-    unresolved claims are touched, so scoring cannot be applied twice.
+    standing claims are touched, so scoring cannot be applied twice, and a
+    withdrawn claim keeps whatever the withdrawal cost.
     """
     if not coords:
         return 0
@@ -690,27 +771,100 @@ def resolve_flags(game_id: int, coords: dict) -> int:
         total = 0
         for coord, was_mine in coords.items():
             cur = conn.execute(
-                "UPDATE flags SET correct = ? "
-                "WHERE game_id = ? AND coord = ? AND correct IS NULL",
+                f"UPDATE flags SET correct = ? "
+                f"WHERE game_id = ? AND coord = ? AND {_STANDING}",
                 (int(bool(was_mine)), game_id, coord))
             total += cur.rowcount
         return total
 
 
-def flag_scores(game_id: int | None = None) -> list:
-    """Per-person flag accuracy, best first, resolved claims only."""
-    where, params = ("WHERE game_id = ?", [game_id]) if game_id else ("", [])
-    clause = ("AND correct IS NOT NULL" if where else "WHERE correct IS NOT NULL")
+def record_assist(game_id: int, did: str, handle: str, coord: str,
+                  flag_coords: list, turn_number: int) -> None:
+    """Somebody opened `coord`, and this person's flags proved it safe."""
+    if not did or not flag_coords:
+        return
     with _connect() as conn:
-        rows = conn.execute(
-            f"""SELECT handle,
-                       SUM(correct) hits,
-                       COUNT(*) total
-                FROM flags {where} {clause}
-                GROUP BY handle ORDER BY hits DESC, total ASC""",
+        conn.execute(
+            """INSERT OR IGNORE INTO assists
+               (game_id, did, handle, coord, flag_coords, turn_number)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (game_id, did, handle, coord, " ".join(sorted(flag_coords)),
+             turn_number))
+
+
+# What one claim row is worth. Settled claims pay out on the truth; a
+# withdrawn one costs the penalty unless it was taken back the same turn.
+_CLAIM_POINTS = """CASE
+    WHEN correct = 1 THEN 1
+    WHEN correct = 0 THEN -1
+    WHEN withdrawn_turn IS NOT NULL AND withdrawn_turn > turn_number THEN -1
+    ELSE 0 END"""
+
+
+def flag_scores(game_id: int | None = None) -> list:
+    """Per-person flag record, best first: [{did, handle, hits, total, points}].
+
+    `points` is the board's flag score, floored at zero — recognition rather
+    than a losing record — and includes paid assists. With no game it is the
+    sum of the per-board floors, so a bad board never eats a good one.
+    """
+    where, params = ("WHERE game_id = ?", [game_id]) if game_id else ("", [])
+    with _connect() as conn:
+        claims = conn.execute(
+            f"""SELECT game_id, did, handle,
+                       SUM(correct = 1) hits,
+                       SUM(correct IS NOT NULL) total,
+                       SUM({_CLAIM_POINTS}) points
+                FROM flags {where}
+                GROUP BY game_id, did""", params).fetchall()
+        correct = {(r["game_id"], r["did"], r["coord"]) for r in conn.execute(
+            f"SELECT game_id, did, coord FROM flags "
+            f"{where + ' AND' if where else 'WHERE'} correct = 1",
+            params).fetchall()}
+        assists = conn.execute(
+            f"SELECT game_id, did, handle, flag_coords FROM assists {where}",
             params).fetchall()
-    return [{"handle": r["handle"], "hits": r["hits"] or 0, "total": r["total"]}
-            for r in rows]
+    per_board = {}
+    for r in claims:
+        per_board[(r["game_id"], r["did"])] = {
+            "did": r["did"], "handle": r["handle"],
+            "hits": r["hits"] or 0, "total": r["total"] or 0,
+            "points": r["points"] or 0}
+    for a in assists:
+        if all((a["game_id"], a["did"], c) in correct
+               for c in a["flag_coords"].split()):
+            entry = per_board.setdefault((a["game_id"], a["did"]), {
+                "did": a["did"], "handle": a["handle"],
+                "hits": 0, "total": 0, "points": 0})
+            entry["points"] += 1
+    totals = {}
+    for (_, did), row in per_board.items():
+        out = totals.setdefault(did, {"did": did, "handle": row["handle"],
+                                      "hits": 0, "total": 0, "points": 0})
+        out["handle"] = row["handle"]
+        out["hits"] += row["hits"]
+        out["total"] += row["total"]
+        out["points"] += max(0, row["points"])
+    return sorted(totals.values(),
+                  key=lambda r: (-r["points"], -r["hits"], r["total"]))
+
+
+def late_withdrawals(game_id: int, did: str, turn_number: int) -> int:
+    """How many of this person's bets were taken back this turn, late."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) n FROM flags WHERE game_id = ? AND did = ? "
+            "AND withdrawn_turn = ? AND withdrawn_turn > turn_number",
+            (game_id, did, turn_number)).fetchone()
+    return row["n"] if row else 0
+
+
+def flag_points(did: str, game_id: int | None = None) -> int:
+    """One person's flag score — this board, or all time."""
+    if not did:
+        return 0
+    return next((r["points"] for r in flag_scores(game_id) if r["did"] == did),
+                0)
 
 
 # ---------------------------------------------------------------------------
@@ -831,6 +985,7 @@ def reset_all(keep_record: bool = False) -> None:
             conn.execute("DELETE FROM game_history")
             conn.execute("DELETE FROM moves")
             conn.execute("DELETE FROM flags")
+            conn.execute("DELETE FROM assists")
             conn.execute("DELETE FROM flag_tutorials")
             conn.execute("DELETE FROM notices")
             conn.execute("DELETE FROM eliminations")

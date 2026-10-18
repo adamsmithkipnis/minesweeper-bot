@@ -93,9 +93,39 @@ C3`, `🚩 C3`, `C3 and D4 are mines` and `unflag C3` all work, because the
 syntax has to be whatever people already write rather than a command they are
 expected to memorise.
 
-One player may flag several cells in one reply. Flags are only claims: they do
-not open cells, trigger mines, or prevent the crowd from opening a flagged
-cell later.
+One player may flag several cells in one reply, up to `FLAG_CAP` new ones a
+turn (2 by default). Flags are only claims: they do not open cells, trigger
+mines, or prevent the crowd from opening a flagged cell later.
+
+### Flag points
+
+**A flag is a bet.** It pays +1 when the cell turns out to hold a mine and
+-1 when it does not, settled the moment the cell is opened or against the
+real layout when the board ends. Flag points are kept apart from move points
+on purpose: they are a different skill, and in simulation a good flagger
+earns two to four times as many of them as they do from opening cells, so
+folding the two together would turn the leaderboard into a flag count.
+
+The penalty is what makes the bet honest. Simulated against four players on
+a 9x9, somebody flagging random cells nets +13 a board with no penalty and
+-27 at a penalty of 1, while the players flagging what they can prove lose
+about a point a board to the odd slip. The per-turn cap is a backstop on top
+of that; it never binds for honest play.
+
+**Taking a flag back is free on the turn you placed it and costs 1 on any
+later turn** — the same as being wrong. Without that, flagging on a hunch
+and withdrawing once the neighbours disproved it would be free money. Bets
+are personal: anyone may clear the pennant from the board, as before, but
+that only hides the mark, and the claims behind it stand.
+
+**An assist pays +1 when somebody opens a cell that your flags proved
+safe** — a revealed number next to it whose remaining mines are exactly your
+flags — paid at board end and only once every flag behind it was right.
+The attribution runs on the public position alone (`solver.flag_assists`),
+so a wrong flag earns the credit as readily as a right one and nothing leaks.
+
+A board's flag score is floored at zero, and all time is the sum of the
+floored boards: recognition, never a losing record anybody has to shake.
 
 ### Knockout play
 
@@ -174,7 +204,8 @@ opened — one bad flag would otherwise let a single person lock a safe cell and
 stall the board forever.
 
 Claims are scored when the cell is opened, or against the real layout when the
-run ends, and the game-over post names who read the mines best on that board.
+run ends. The game-over post names the top flaggers by points, and the weekly
+standings carry a flag table when it fits.
 
 ### Milestones
 
