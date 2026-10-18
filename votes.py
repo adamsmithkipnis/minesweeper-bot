@@ -160,6 +160,13 @@ def find_mentions(text: str, rows: int, cols: int) -> list:
         for i in range(len(out)):
             if out[i].is_flag or out[i].is_unflag:
                 continue
+            # An unflag carries forwards only: "unflag E1 E5" clears both.
+            # Left out, E5 was a plain mention and, being last, became the
+            # vote — opening a cell somebody had just asked to unmark.
+            if i > 0 and out[i - 1].is_unflag and _joined(i - 1, i):
+                out[i] = Mention(out[i].coord, is_unflag=True)
+                changed = True
+                continue
             neighbours = [j for j in (i - 1, i + 1) if 0 <= j < len(out)]
             for j in neighbours:
                 if out[j].is_flag and _joined(min(i, j), max(i, j)):

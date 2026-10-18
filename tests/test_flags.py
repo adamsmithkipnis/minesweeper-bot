@@ -466,6 +466,23 @@ class Unflagging(unittest.TestCase):
                 self.assertIsNone(votes.parse_vote(text, 9, 9),
                                   f"{text!r} was read as a vote to open")
 
+    def test_unflag_carries_across_a_list(self):
+        # The live reply that opened E5: it asked to unflag E1 and E5 and
+        # open E7.
+        text = "E7\nUnflag E1 E5"
+        self.assertEqual(votes.parse_flags(text, 9, 9), (set(), {"E1", "E5"}))
+        self.assertEqual(votes.parse_vote(text, 9, 9), "E7")
+        for text in ("unflag E1, E5 and E6", "unflag E1 & E5 and open E7"):
+            with self.subTest(text=text):
+                withdrawn = votes.parse_flags(text, 9, 9)[1]
+                self.assertLessEqual({"E1", "E5"}, withdrawn)
+                self.assertNotIn(votes.parse_vote(text, 9, 9), withdrawn)
+
+    def test_unflag_does_not_carry_into_a_vote(self):
+        text = "unflag E1 and open E5"
+        self.assertEqual(votes.parse_flags(text, 9, 9)[1], {"E1"})
+        self.assertEqual(votes.parse_vote(text, 9, 9), "E5")
+
     def test_unflag_and_vote_in_one_reply(self):
         claimed, withdrawn = votes.parse_flags("unflag D6 and vote D6", 9, 9)
         self.assertIn("D6", withdrawn)
