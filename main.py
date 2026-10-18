@@ -1393,7 +1393,8 @@ def _confirm_unflags(state: game.GameState, withdrawn: dict) -> None:
             text = build_unflag_reply(
                 cells, len(counts),
                 db.late_withdrawals(state.game_id, reply.did,
-                                    state.turn_number))
+                                    state.turn_number)
+                if db.flag_scoring_active(state.game_id) else 0)
             uri = bluesky.post_reply(
                 text, parent_uri=reply.uri, parent_cid=reply.cid,
                 root_uri=reply.root_uri, root_cid=reply.root_cid,

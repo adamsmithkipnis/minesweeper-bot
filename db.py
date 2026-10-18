@@ -94,6 +94,15 @@ CREATE TABLE IF NOT EXISTS flags (
 -- (and its penalty), so flagging the cell again starts a fresh bet.
 DROP INDEX IF EXISTS idx_flags_one_per_person;
 
+-- One-row settings the code decides for itself. `flag_scoring_from` is the
+-- first board whose flags count for points: set to the board after the live
+-- one when the scoring columns arrive, so a rules change lands at a board
+-- boundary and the game in progress finishes under the rules it started on.
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+
 -- Somebody's flags made a cell provably safe and somebody opened it. Paid
 -- at board end, and only if every flag behind it was right. Keyed on the
 -- opened cell so a replayed turn cannot credit the same assist twice.
@@ -224,7 +233,9 @@ def connect_readonly() -> sqlite3.Connection:
     return conn
 
 
-def _migrate(conn: sqlite3.Connection) -> None:
+def _migrate(conn: sqlite3.Connection) -> set:
+    """Add missing columns; returns the {(table, column)} it added."""
+    added = set()
     for table, columns in _ADDED_COLUMNS.items():
         existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
         if not existing:
@@ -233,6 +244,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
             if name not in existing:
                 logger.info("Migrating: adding %s.%s", table, name)
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {coltype}")
+                added.add((table, name))
+    return added
 
 
 def init_db() -> None:
@@ -246,7 +259,20 @@ def init_db() -> None:
             "AND name = 'flag_tutorials'"
         ).fetchone() is not None
         conn.executescript(_SCHEMA)
-        _migrate(conn)
+        added = _migrate(conn)
+        if ("flags", "withdrawn_turn") in added:
+            # Scoring arrives on a live database: the board in progress
+            # finishes under the rules it started on, and points begin with
+            # the next one. A fresh database has no board to protect.
+            live = conn.execute(
+                "SELECT game_id FROM game_state "
+                "ORDER BY updated_at DESC, id DESC LIMIT 1").fetchone()
+            if live and live["game_id"]:
+                conn.execute(
+                    "INSERT OR IGNORE INTO settings (key, value) VALUES "
+                    "('flag_scoring_from', ?)", (str(live["game_id"] + 1),))
+                logger.info("Flag points begin with board %d",
+                            live["game_id"] + 1)
         # After the migration, because the index needs the columns it adds.
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_flags_one_standing_claim "
@@ -801,6 +827,19 @@ _CLAIM_POINTS = """CASE
     ELSE 0 END"""
 
 
+def flag_scoring_from() -> int:
+    """The first board whose flags count for points (0 = all of them)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = 'flag_scoring_from'"
+        ).fetchone()
+    return int(row["value"]) if row else 0
+
+
+def flag_scoring_active(game_id: int) -> bool:
+    return game_id >= flag_scoring_from()
+
+
 def flag_scores(game_id: int | None = None) -> list:
     """Per-person flag record, best first: [{did, handle, hits, total, points}].
 
@@ -808,7 +847,11 @@ def flag_scores(game_id: int | None = None) -> list:
     than a losing record — and includes paid assists. With no game it is the
     sum of the per-board floors, so a bad board never eats a good one.
     """
-    where, params = ("WHERE game_id = ?", [game_id]) if game_id else ("", [])
+    # A board from before points existed scores nobody, so the switch lands
+    # between boards rather than halfway through one.
+    where, params = "WHERE game_id >= ?", [flag_scoring_from()]
+    if game_id:
+        where, params = where + " AND game_id = ?", params + [game_id]
     with _connect() as conn:
         claims = conn.execute(
             f"""SELECT game_id, did, handle,
@@ -818,8 +861,7 @@ def flag_scores(game_id: int | None = None) -> list:
                 FROM flags {where}
                 GROUP BY game_id, did""", params).fetchall()
         correct = {(r["game_id"], r["did"], r["coord"]) for r in conn.execute(
-            f"SELECT game_id, did, coord FROM flags "
-            f"{where + ' AND' if where else 'WHERE'} correct = 1",
+            f"SELECT game_id, did, coord FROM flags {where} AND correct = 1",
             params).fetchall()}
         assists = conn.execute(
             f"SELECT game_id, did, handle, flag_coords FROM assists {where}",
