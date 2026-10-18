@@ -101,6 +101,12 @@ QUORUM = int(os.environ.get("QUORUM", "2"))
 # essentially never show, and a flag that never appears teaches nobody.
 FLAG_QUORUM = int(os.environ.get("FLAG_QUORUM", "1"))
 
+# How many new flags one person may place in a turn. A flag is a bet that
+# pays +1 or -1, and the penalty is what stops guess-spamming: simulated
+# against four players, random flags net -27 a board at a penalty of 1 and
+# +13 at a penalty of 0. The cap is a backstop on top of that. Zero lifts it.
+FLAG_CAP = int(os.environ.get("FLAG_CAP", "2"))
+
 DB_PATH = os.environ.get("DB_PATH", "minesweeper.db")
 LOG_PATH = os.environ.get("LOG_PATH", "")
 

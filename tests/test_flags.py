@@ -105,7 +105,8 @@ class Scoring(unittest.TestCase):
         db.add_flag(1, "D4", "did:a", "a", 1)      # not a mine
         db.resolve_flags(1, {"C3": True, "D4": False})
         scores = db.flag_scores(1)
-        self.assertEqual(scores, [{"handle": "a", "hits": 1, "total": 2}])
+        self.assertEqual(scores, [{"did": "did:a", "handle": "a",
+                                   "hits": 1, "total": 2, "points": 0}])
 
     def test_resolved_claims_leave_the_board(self):
         db.add_flag(1, "C3", "did:a", "a", 1)
@@ -131,6 +132,233 @@ class Scoring(unittest.TestCase):
         db.resolve_flags(1, {"C3": True})
         self.assertEqual(db.flag_counts(1), {})
         self.assertEqual(db.flag_counts(2), {"C3": 1})
+
+
+class FlagPoints(unittest.TestCase):
+    """A flag is a bet: +1 right, -1 wrong, and taking it back late costs
+    the same as being wrong. Nobody's board score goes below zero."""
+
+    def setUp(self):
+        self._old = config.DB_PATH
+        config.DB_PATH = os.path.join(tempfile.mkdtemp(), "flags.db")
+        db.init_db()
+
+    def tearDown(self):
+        config.DB_PATH = self._old
+
+    def points(self, did="did:a", game_id=1):
+        return db.flag_points(did, game_id)
+
+    def test_a_right_flag_is_a_point_and_a_wrong_one_costs_one(self):
+        db.add_flag(1, "C3", "did:a", "a", 1)
+        db.add_flag(1, "D4", "did:a", "a", 1)
+        db.add_flag(1, "E5", "did:a", "a", 1)
+        db.resolve_flags(1, {"C3": True, "D4": True, "E5": False})
+        self.assertEqual(self.points(), 1)
+
+    def test_a_board_score_never_goes_below_zero(self):
+        db.add_flag(1, "C3", "did:a", "a", 1)
+        db.add_flag(1, "D4", "did:a", "a", 1)
+        db.resolve_flags(1, {"C3": False, "D4": False})
+        self.assertEqual(self.points(), 0)
+        self.assertEqual(db.flag_scores(1)[0]["points"], 0)
+
+    def test_all_time_sums_the_floored_boards(self):
+        db.add_flag(1, "C3", "did:a", "a", 1)
+        db.add_flag(1, "D4", "did:a", "a", 1)
+        db.resolve_flags(1, {"C3": False, "D4": False})     # -2, floored to 0
+        db.add_flag(2, "C3", "did:a", "a", 1)
+        db.resolve_flags(2, {"C3": True})                    # +1
+        self.assertEqual(self.points(game_id=None), 1,
+                         "a bad board must not eat a good one")
+
+    def test_taking_a_flag_back_the_same_turn_is_free(self):
+        db.add_flag(1, "C3", "did:a", "a", 4)
+        self.assertTrue(db.withdraw_flag(1, "C3", "did:a", 4))
+        db.resolve_flags(1, {"C3": False})
+        self.assertEqual(self.points(), 0)
+        self.assertEqual(db.flag_counts(1), {})
+
+    def test_taking_a_flag_back_later_costs_a_point(self):
+        db.add_flag(1, "C3", "did:a", "a", 4)
+        db.add_flag(1, "D4", "did:a", "a", 4)
+        db.withdraw_flag(1, "C3", "did:a", 7)
+        db.resolve_flags(1, {"C3": True, "D4": True})
+        self.assertEqual(self.points(), 0,
+                         "a withdrawn claim neither pays out nor escapes")
+        self.assertEqual(db.late_withdrawals(1, "did:a", 7), 1)
+        self.assertEqual(db.late_withdrawals(1, "did:a", 4), 0)
+
+    def test_flagging_again_after_withdrawing_is_a_fresh_bet(self):
+        db.add_flag(1, "C3", "did:a", "a", 1)
+        db.withdraw_flag(1, "C3", "did:a", 5)
+        self.assertTrue(db.add_flag(1, "C3", "did:a", "a", 5))
+        db.resolve_flags(1, {"C3": True})
+        self.assertEqual(self.points(), 0,
+                         "the late withdrawal still costs its point")
+
+    def test_a_scored_claim_cannot_be_withdrawn(self):
+        db.add_flag(1, "C3", "did:a", "a", 1)
+        db.resolve_flags(1, {"C3": True})
+        self.assertFalse(db.withdraw_flag(1, "C3", "did:a", 9))
+        self.assertEqual(self.points(), 1)
+
+    def test_somebody_else_clearing_the_pennant_does_not_touch_the_bet(self):
+        db.add_flag(1, "C3", "did:a", "a", 1)
+        db.remove_flag(1, "C3")
+        self.assertEqual(db.flag_counts(1), {}, "the mark is gone")
+        self.assertEqual(db.standing_flags(1)["did:a"]["coords"], {"C3"},
+                         "the claim still stands")
+        db.resolve_flags(1, {"C3": True})
+        self.assertEqual(self.points(), 1)
+
+    def test_reflagging_a_cleared_pennant_puts_it_back_without_a_new_bet(self):
+        db.add_flag(1, "C3", "did:a", "a", 1)
+        db.remove_flag(1, "C3")
+        self.assertFalse(db.add_flag(1, "C3", "did:a", "a", 3),
+                         "no new row: the standing claim is reused")
+        self.assertEqual(db.flag_counts(1), {"C3": 1})
+
+    def test_an_assist_pays_when_every_flag_behind_it_was_right(self):
+        db.add_flag(1, "C3", "did:a", "a", 1)
+        db.record_assist(1, "did:a", "a", "D4", ["C3"], 2)
+        db.record_assist(1, "did:a", "a", "D4", ["C3"], 2)   # a replayed turn
+        self.assertEqual(self.points(), 0, "nothing is paid before the truth")
+        db.resolve_flags(1, {"C3": True})
+        self.assertEqual(self.points(), 2, "one for the flag, one assist")
+
+    def test_an_assist_built_on_a_wrong_flag_pays_nothing(self):
+        db.add_flag(1, "C3", "did:a", "a", 1)
+        db.add_flag(1, "C4", "did:a", "a", 1)
+        db.record_assist(1, "did:a", "a", "D4", ["C3", "C4"], 2)
+        db.resolve_flags(1, {"C3": True, "C4": False})
+        self.assertEqual(self.points(), 0)
+
+    def test_scores_rank_by_points(self):
+        db.add_flag(1, "C3", "did:a", "a", 1)
+        db.add_flag(1, "C3", "did:b", "b", 1)
+        db.add_flag(1, "D4", "did:b", "b", 1)
+        db.resolve_flags(1, {"C3": True, "D4": True})
+        self.assertEqual([r["handle"] for r in db.flag_scores(1)], ["b", "a"])
+
+
+class Assists(unittest.TestCase):
+    """Credit for the flags that proved a cell safe reads only the public
+    position — numbers and claims — never the mines."""
+
+    def position(self):
+        # A 1 at B2 with every neighbour hidden but A1.
+        return solver.Position(rows=3, cols=3, mine_count=1,
+                               revealed={(1, 1): 1})
+
+    def test_a_flag_that_satisfies_the_number_credits_the_other_cells(self):
+        credits = solver.flag_assists(self.position(), (0, 0),
+                                      {"did:a": {"A2"}})
+        self.assertEqual(credits, {"did:a": ["A2"]})
+
+    def test_opening_the_flagged_cell_itself_is_no_assist(self):
+        credits = solver.flag_assists(self.position(), (0, 1),
+                                      {"did:a": {"A2"}})
+        self.assertEqual(credits, {})
+
+    def test_too_many_or_too_few_flags_prove_nothing(self):
+        self.assertEqual(solver.flag_assists(
+            self.position(), (0, 0), {"did:a": {"A2", "A3"}}), {})
+        self.assertEqual(solver.flag_assists(
+            self.position(), (0, 0), {"did:a": set()}), {})
+
+    def test_a_spent_mine_counts_toward_the_number(self):
+        position = solver.Position(rows=3, cols=3, mine_count=2,
+                                   revealed={(1, 1): 2},
+                                   spent=frozenset({(2, 2)}))
+        credits = solver.flag_assists(position, (0, 0), {"did:a": {"A2"}})
+        self.assertEqual(credits, {"did:a": ["A2"]})
+
+    def test_a_wrong_flag_earns_the_credit_too(self):
+        # Whether A2 is really a mine is unknowable here, and must be.
+        credits = solver.flag_assists(self.position(), (0, 0),
+                                      {"did:a": {"A2"}, "did:b": {"B3"}})
+        self.assertEqual(set(credits), {"did:a", "did:b"})
+
+
+class Cap(unittest.TestCase):
+    """Two new flags a turn each. Repeating a standing one is free."""
+
+    def setUp(self):
+        self._old = config.DB_PATH
+        self._cap = config.FLAG_CAP
+        config.DB_PATH = os.path.join(tempfile.mkdtemp(), "flags.db")
+        config.FLAG_CAP = 2
+        db.init_db()
+        self.state = game.new_game(1, rng=random.Random(1))
+        self.state.turn_number = 3
+
+    def tearDown(self):
+        config.DB_PATH = self._old
+        config.FLAG_CAP = self._cap
+
+    def record(self, text, did="a", when="1"):
+        open_cells = {game.index_to_coord(r, c) for (r, c) in self.state.revealed}
+        claimed, withdrawn, _ = votes.collect_flag_changes(
+            [reply(did, text, when)], open_cells, ROWS, COLS)
+        return main._record_flags(self.state, claimed, withdrawn)
+
+    def hidden(self, n):
+        cells = [game.index_to_coord(r, c)
+                 for (r, c) in sorted(self.state.hidden_cells())]
+        return cells[:n]
+
+    def test_the_third_flag_in_a_turn_waits(self):
+        a, b, c = self.hidden(3)
+        accepted, capped = self.record(f"flag {a}, {b} and {c}")
+        self.assertEqual(sorted(accepted), sorted([a, b]))
+        self.assertEqual([coord for _, coord in capped["a"]], [c])
+        self.assertEqual(set(db.flag_counts(1)), {a, b})
+
+    def test_repeating_a_standing_flag_does_not_use_the_cap(self):
+        a, b, c = self.hidden(3)
+        self.record(f"flag {a}")
+        self.state.turn_number += 1
+        accepted, capped = self.record(f"flag {a}, {b} and {c}")
+        self.assertEqual(capped, {})
+        self.assertEqual(set(db.flag_counts(1)), {a, b, c})
+
+    def test_a_cap_of_zero_lifts_it(self):
+        config.FLAG_CAP = 0
+        cells = self.hidden(5)
+        accepted, capped = self.record("flag " + ", ".join(cells))
+        self.assertEqual(capped, {})
+        self.assertEqual(len(accepted), 5)
+
+    def test_withdrawing_is_personal_and_dated(self):
+        a, b = self.hidden(2)
+        self.record(f"flag {a} and {b}")
+        self.record(f"flag {a}", did="b")
+        self.state.turn_number += 1
+        self.record(f"unflag {a}", did="b")
+        self.assertEqual(db.flag_counts(1), {b: 1}, "the pennant is cleared")
+        standing = db.standing_flags(1)
+        self.assertEqual(standing["a"]["coords"], {a, b},
+                         "a's bet on the cell stands")
+        self.assertNotIn("b", standing)
+        self.assertEqual(db.late_withdrawals(1, "b", 4), 1)
+
+    def test_the_cap_reply_names_both_lists(self):
+        text = main.build_flag_cap_reply(["C3", "D4"], ["E5"])
+        self.assertIn("C3, D4 are flagged", text)
+        self.assertIn("E5 will have to wait", text)
+        self.assertLessEqual(len(text), 300)
+
+    def test_the_unflag_reply_prices_a_late_withdrawal(self):
+        text = main.build_unflag_reply({"C3": 0}, 2, late=1)
+        self.assertIn("costs 1 point", text)
+        self.assertNotIn("costs", main.build_unflag_reply({"C3": 0}, 2))
+
+    def test_the_tutorial_says_what_a_flag_is_worth(self):
+        text = main.build_flag_reply(["C3"], 1)
+        self.assertIn("+1", text)
+        self.assertIn("-1", text)
+        self.assertLessEqual(len(text), 300)
 
 
 class FirstFlagTutorial(unittest.TestCase):

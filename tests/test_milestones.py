@@ -254,6 +254,37 @@ class WeeklyCopy(unittest.TestCase):
         for i in range(3):
             self.assertEqual(dids[f"player{i}"], f"did:{i}")
 
+    def flaggers(self, n=2):
+        return [{"did": f"did:f{i}", "handle": f"flagger{i}.bsky.social",
+                 "hits": 5, "total": 6, "points": 9 - i} for i in range(n)]
+
+    def test_flag_points_get_their_own_table(self):
+        start, end = self.week()
+        text, dids = main.build_leaderboard_text(
+            self.rows(3), self.rows(3), start, end, self.flaggers())
+        self.assertIn("🚩 Flags: @flagger0 9 · @flagger1 8", text)
+        self.assertEqual(dids["flagger0"], "did:f0")
+        self.assertLessEqual(len(text), 300)
+
+    def test_nobody_with_zero_flag_points_is_listed(self):
+        start, end = self.week()
+        rows = self.flaggers()
+        rows[1]["points"] = 0
+        text, _ = main.build_leaderboard_text(self.rows(3), self.rows(3),
+                                              start, end, rows)
+        self.assertIn("@flagger0", text)
+        self.assertNotIn("@flagger1", text)
+
+    def test_the_flag_table_is_the_first_thing_trimmed(self):
+        start, end = self.week()
+        long = "averyveryverylongplayerhandle{}.bsky.social"
+        text, _ = main.build_leaderboard_text(
+            self.rows(3, handle=long), self.rows(3, handle=long), start, end,
+            self.flaggers())
+        self.assertNotIn("🚩", text)
+        self.assertIn("All time:", text)
+        self.assertLessEqual(len(text), 300)
+
 
 class WeeklyWindow(unittest.TestCase):
     """Which moves count as "this week", and when the post is owed."""

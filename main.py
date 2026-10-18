@@ -305,9 +305,9 @@ def build_gameover_text(state: game.GameState, coord: str, vote, source: str,
                 f"Next board: {next_phrase}. Follow to catch the opening.")
     optional = [
         mvp_line,
+        flag_line,
         f"You called {crowd_moves} of {_plural(state.turn_number, 'move')}."
         if crowd_moves else "",
-        flag_line,
     ]
 
     kept = []
@@ -333,17 +333,22 @@ def build_flag_reply(coords: list, total_flagged: int) -> str:
             else "vote to open somewhere else")
     return _with_tags(
         f"🚩 Flagged {which}. It shows on the board and costs no turn — "
-        f"you can flag and still {also} in the same reply.\n\n"
+        f"you can flag and still {also} in the same reply.\n"
+        f"A flag is a bet: +1 if it's a mine, -1 if not, settled when the "
+        f"cell opens or the board ends. 'unflag {coords[0]}' takes it back.\n\n"
         f"{_plural(total_flagged, 'cell')} flagged so far.",
         tags=[config.REPLY_HASHTAG])
 
 
-def build_unflag_reply(cells: dict, total_flagged: int) -> str:
+def build_unflag_reply(cells: dict, total_flagged: int,
+                       late: int = 0) -> str:
     """Acknowledge an unflag, and be honest when the flag stays up.
 
     Anyone may clear any flag, so a cell only stays up if somebody flagged it
     again after the unflag. `cells` maps each coordinate to how many people
-    have it flagged now.
+    have it flagged now. `late` is how many of this player's own bets were
+    taken back after the turn they were placed, which costs the same as
+    being wrong — said plainly, since it is the one part that costs points.
     """
     shown = sorted(cells)[:3]
     cleared = [c for c in shown if not cells[c]]
@@ -355,9 +360,22 @@ def build_unflag_reply(cells: dict, total_flagged: int) -> str:
     for coord in kept:
         parts.append(f"{coord} is flagged again — "
                      f"{_plural(cells[coord], 'player')} flagged it after")
+    cost = (f" Taking back a flag after the turn you placed it costs 1 point "
+            f"({-late} this time)." if late else "")
     return _with_tags(
-        f"🏳️ Unflagged. {'; '.join(parts)}.\n\n"
+        f"🏳️ Unflagged. {'; '.join(parts)}.{cost}\n\n"
         f"{_plural(total_flagged, 'cell')} flagged now.",
+        tags=[config.REPLY_HASHTAG])
+
+
+def build_flag_cap_reply(placed: list, waiting: list) -> str:
+    """Say which flags went on and which must wait for next turn."""
+    kept = (f"{', '.join(placed[:3])} "
+            f"{'is' if len(placed) == 1 else 'are'} flagged. " if placed else "")
+    return _with_tags(
+        f"⏳ {kept}{', '.join(waiting[:3])} will have to wait: "
+        f"{_plural(config.FLAG_CAP, 'new flag')} a turn each, so say "
+        f"{'it' if len(waiting) == 1 else 'them'} again on the next board post.",
         tags=[config.REPLY_HASHTAG])
 
 
@@ -466,19 +484,16 @@ def build_credit_reply(state: game.GameState, coord: str, vote,
 
 
 def build_flag_line(scores: list) -> str:
-    """Who read the mines correctly on this board.
+    """Who read the mines best on this board, as flag points.
 
-    Per board rather than all time: recognition without a leaderboard to
-    maintain, and nobody accumulates a losing record they cannot shake.
+    Per board rather than all time, and floored at zero in the database:
+    recognition without a losing record anybody has to shake.
     """
-    scored = [s for s in scores if s["hits"]]
+    scored = [s for s in scores if s["points"] > 0][:2]
     if not scored:
         return ""
-    best = scored[0]
-    line = f"🚩 @{best['handle']} called {best['hits']} of {best['total']} mines"
-    if len(scored) > 1:
-        line += f", then @{scored[1]['handle']} ({scored[1]['hits']})"
-    return line + "."
+    return "🚩 Flags: " + " · ".join(
+        f"@{s['handle']} +{s['points']}" for s in scored)
 
 
 def build_mvp_line(leaders: list) -> str:
@@ -601,7 +616,7 @@ def milestone_crossings(did: str, handle: str, total: int, earned: int,
 
 
 def build_leaderboard_text(all_time: list, weekly: list, week_start,
-                           week_end) -> str:
+                           week_end, flaggers: list = ()) -> str:
     """The Saturday standings post.
 
     Two tables in 300 characters means the names have to be short and the
@@ -609,10 +624,12 @@ def build_leaderboard_text(all_time: list, weekly: list, week_start,
     barely moves week to week, and a table nobody can enter is not a reason
     to come back.
     """
-    rows = list(weekly) + list(all_time)
+    flaggers = [f for f in flaggers if f["points"] > 0][:3]
+    rows = list(weekly) + list(all_time) + flaggers
     display, dids = _names(rows)
     weekly_names = display[:len(weekly)]
-    all_time_names = display[len(weekly):]
+    all_time_names = display[len(weekly):len(weekly) + len(all_time)]
+    flag_names = display[len(weekly) + len(all_time):]
 
     span = f"{week_start:%b %-d}–{week_end:%b %-d}"
     head = f"🏆 WEEKLY STANDINGS · {span}"
@@ -629,6 +646,13 @@ def build_leaderboard_text(all_time: list, weekly: list, week_start,
     if all_time:
         lines.append("All time: " + table(all_time_names, all_time))
 
+    # Flag points are a separate table on purpose: they are a different
+    # skill from opening cells, and folding them into one number would let
+    # the bigger of the two drown the other. Shown only while it fits, and
+    # trimmed first, since it is the newest and the least load-bearing.
+    if flaggers:
+        lines.append("🚩 Flags: " + table(flag_names, flaggers))
+
     # A scoreboard is a reason to look; an invitation is a reason to play.
     # Added before the tags and after the tables, so it takes the room a
     # sixth hashtag would have had and loses to a name if it comes to that.
@@ -637,7 +661,10 @@ def build_leaderboard_text(all_time: list, weekly: list, week_start,
     # Trim the tables from the bottom row up rather than dropping a whole
     # table, so a crowded week still shows a podium of some size.
     while len("\n".join(lines)) > bluesky.POST_LIMIT - 20:
-        if len(all_time_names) > 1:
+        if flaggers:
+            flaggers = []
+            lines = [line for line in lines if not line.startswith("🚩")]
+        elif len(all_time_names) > 1:
             all_time_names, all_time = all_time_names[:-1], all_time[:-1]
             lines[-1] = "All time: " + table(all_time_names, all_time)
         elif len(weekly_names) > 1:
@@ -835,7 +862,10 @@ def apply_knockout_moves(state: game.GameState, replies: list,
         except ValueError:
             continue
         before_cells = set(state.revealed)
+        position_before = solver.Position.from_state(state)
         outcome = game.reveal(state, *index)
+        if outcome == game.SAFE and move.did:
+            _record_assists(state, position_before, index)
         if outcome == game.ALREADY:
             if index in cascade_opened:
                 superseded.append(move)
@@ -968,7 +998,8 @@ def build_knockout_turn_text(state: game.GameState, plays: list,
 
 def build_knockout_gameover_text(state: game.GameState, record: dict,
                                  survivors: int, entrants: int,
-                                 mvp_line: str, next_board_at) -> str:
+                                 mvp_line: str, next_board_at,
+                                 flag_line: str = "") -> str:
     tier = tier_of(state) + 1
     if state.status == game.CLEARED:
         head = (f"🎉 BOARD SWEPT in {_plural(state.turn_number, 'turn')} — "
@@ -988,30 +1019,78 @@ def build_knockout_gameover_text(state: game.GameState, record: dict,
                 f"Next board: {next_phrase}. Follow to catch the opening.")
 
     kept = []
-    for line in filter(None, [mvp_line]):
+    for line in filter(None, [mvp_line, flag_line]):
         body = f"{head}\n" + "\n".join(kept + [line, required])
         if len(body) <= bluesky.POST_LIMIT:
             kept.append(line)
     return _with_tags(f"{head}\n" + "\n".join(kept + [required]))
 
 
-def _record_flags(state: game.GameState, claimed: dict, withdrawn: dict) -> None:
-    """Persist this turn's mine claims. Never allowed to break a turn."""
+def _record_flags(state: game.GameState, claimed: dict,
+                  withdrawn: dict) -> tuple:
+    """Persist this turn's mine claims. Never allowed to break a turn.
+
+    Returns ``(accepted, capped)``: the claims that went on the record, and
+    ``{did: [(reply, coord), ...]}`` for the ones that fell over the per-turn
+    cap, so the people behind them can be told to try again next turn.
+    """
+    accepted, capped = {}, {}
     try:
-        # Withdrawals first: anyone may clear a cell, and collect_flags has
-        # already dropped whichever side lost the turn's first-change rule.
-        for coord in withdrawn:
+        # Withdrawals first, so flag-then-unflag in one reply has already
+        # been reduced to the latest word by collect_flag_changes. Clearing
+        # the pennant is shared; taking back a bet is personal.
+        for coord, repliers in withdrawn.items():
             db.remove_flag(state.game_id, coord)
-        for coord, repliers in claimed.items():
             for reply in repliers:
-                db.add_flag(state.game_id, coord, reply.did, reply.handle,
-                            state.turn_number)
+                if reply.did:
+                    db.withdraw_flag(state.game_id, coord, reply.did,
+                                     state.turn_number)
+        # Claims in reply order, so the first two somebody names are the
+        # ones that count, not an accident of dictionary order.
+        ordered = sorted(((reply, coord)
+                          for coord, repliers in claimed.items()
+                          for reply in repliers),
+                         key=lambda item: (item[0].created_at or "",
+                                           item[1]))
+        placed = {}
+        for reply, coord in ordered:
+            if config.FLAG_CAP and placed.get(reply.did, 0) >= config.FLAG_CAP:
+                capped.setdefault(reply.did, []).append((reply, coord))
+                continue
+            if db.add_flag(state.game_id, coord, reply.did, reply.handle,
+                           state.turn_number):
+                placed[reply.did] = placed.get(reply.did, 0) + 1
+            accepted.setdefault(coord, []).append(reply)
         if claimed or withdrawn:
-            logger.info("Flags: %d claimed, %d withdrawn",
-                        sum(len(v) for v in claimed.values()),
-                        sum(len(v) for v in withdrawn.values()))
+            logger.info("Flags: %d claimed, %d withdrawn, %d over the cap",
+                        sum(len(v) for v in accepted.values()),
+                        sum(len(v) for v in withdrawn.values()),
+                        sum(len(v) for v in capped.values()))
     except Exception:
         logger.exception("Failed to record flags")
+    return accepted, capped
+
+
+def _record_assists(state: game.GameState, position, opened: tuple) -> None:
+    """Credit whoever's flags proved the cell somebody just opened safe.
+
+    `position` is the board as it stood before the move. Written before the
+    post goes out, like an elimination: the row is keyed on the opened cell,
+    so a replayed turn finds it already there.
+    """
+    try:
+        standing = db.standing_flags(state.game_id)
+        if not standing:
+            return
+        credits = solver.flag_assists(
+            position, opened,
+            {did: entry["coords"] for did, entry in standing.items()})
+        for did, flag_coords in credits.items():
+            db.record_assist(state.game_id, did, standing[did]["handle"],
+                             game.index_to_coord(*opened), flag_coords,
+                             state.turn_number)
+    except Exception:
+        logger.exception("Failed to record assists")
 
 
 def _resolve_flags(state: game.GameState, coord: str, result: str,
@@ -1311,7 +1390,11 @@ def _confirm_unflags(state: game.GameState, withdrawn: dict) -> None:
         try:
             counts = db.flag_counts(state.game_id)
             cells = {c: counts.get(c, 0) for c in entry["coords"]}
-            text = build_unflag_reply(cells, len(counts))
+            text = build_unflag_reply(
+                cells, len(counts),
+                db.late_withdrawals(state.game_id, reply.did,
+                                    state.turn_number)
+                if db.flag_scoring_active(state.game_id) else 0)
             uri = bluesky.post_reply(
                 text, parent_uri=reply.uri, parent_cid=reply.cid,
                 root_uri=reply.root_uri, root_cid=reply.root_cid,
@@ -1319,6 +1402,30 @@ def _confirm_unflags(state: game.GameState, withdrawn: dict) -> None:
             _remember(uri, "unflagack", state.game_id, state.turn_number)
         except Exception:
             logger.exception("Failed to confirm unflag for %s", reply.handle)
+
+
+def _confirm_capped_flags(state: game.GameState, capped: dict,
+                          claimed: dict) -> None:
+    """Tell each player whose flags went over the per-turn cap, once."""
+    for did, requests in capped.items():
+        reply = min((r for r, _ in requests), key=lambda r: r.created_at or "")
+        if not reply.did or not reply.uri:
+            continue
+        placed = sorted(c for c, repliers in claimed.items()
+                        if any(r.did == did for r in repliers))
+        waiting = sorted({c for _, c in requests} - set(placed))
+        if not waiting:
+            continue
+        try:
+            uri = bluesky.post_reply(
+                build_flag_cap_reply(placed, waiting),
+                parent_uri=reply.uri, parent_cid=reply.cid,
+                root_uri=reply.root_uri, root_cid=reply.root_cid,
+                kind="flagcap")
+            _remember(uri, "flagcap", state.game_id, state.turn_number)
+        except Exception:
+            logger.exception("Failed to answer capped flags for %s",
+                             reply.handle)
 
 
 def _confirm_ignored_flags(state: game.GameState, ignored: dict) -> None:
@@ -1397,11 +1504,11 @@ def _game_tick() -> None:
     claimed, withdrawn, ignored = votes.collect_flag_changes(
         replies, already_open, state.rows, state.cols,
         db.flagged_coords(state.game_id, config.FLAG_QUORUM))
-    _record_flags(state, claimed, withdrawn)
+    claimed, capped = _record_flags(state, claimed, withdrawn)
 
     if config.KNOCKOUT:
         _play_knockout_turn(state, replies, already_open, position, analysis,
-                            claimed, withdrawn, ignored)
+                            claimed, withdrawn, ignored, capped)
         return
 
     # 2. Decide. The quorum exists to stop one stray vote carrying a turn when
@@ -1438,6 +1545,8 @@ def _game_tick() -> None:
         logger.error("Turn %d picked an open cell %s; skipping",
                      state.turn_number, coord)
         return
+    if result == game.SAFE and source == "crowd":
+        _record_assists(state, position, index)
     # A move scores the cells it opened — a blank that cascades is worth
     # more than a single numbered cell, and a mine scores nothing.
     points = ((len(state.revealed) - len(revealed_before))
@@ -1541,6 +1650,8 @@ def _game_tick() -> None:
         _confirm_unflags(state, withdrawn)
     if ignored:
         _confirm_ignored_flags(state, ignored)
+    if capped:
+        _confirm_capped_flags(state, capped, claimed)
 
     if not move_recorded:
         try:
@@ -1571,7 +1682,8 @@ def _game_tick() -> None:
 def _play_knockout_turn(state: game.GameState, replies: list,
                         already_open: set, position, analysis,
                         claimed: dict, withdrawn: dict,
-                        ignored: dict | None = None) -> None:
+                        ignored: dict | None = None,
+                        capped: dict | None = None) -> None:
     """One knockout turn: everybody eligible opens a cell of their own.
 
     Same ordering discipline as the plurality path — the move is applied in
@@ -1615,7 +1727,8 @@ def _play_knockout_turn(state: game.GameState, replies: list,
             state, record, max(0, entrants - len(eliminated)), entrants,
             build_mvp_line(leaders),
             datetime.now().astimezone()
-            + timedelta(seconds=config.RESTART_DELAY_SECONDS))
+            + timedelta(seconds=config.RESTART_DELAY_SECONDS),
+            build_flag_line(db.flag_scores(state.game_id)))
         kind = "gameover"
     else:
         text = build_knockout_turn_text(state, plays, flags)
@@ -1651,6 +1764,8 @@ def _play_knockout_turn(state: game.GameState, replies: list,
         _confirm_unflags(state, withdrawn)
     if ignored:
         _confirm_ignored_flags(state, ignored)
+    if capped:
+        _confirm_capped_flags(state, capped, claimed)
 
     db.save_state(state)
 
@@ -1828,7 +1943,8 @@ def weekly_leaderboard(now: datetime | None = None) -> str:
     if not weekly and not all_time:
         logger.info("No scores yet; skipping the weekly standings")
         return ""
-    text, dids = build_leaderboard_text(all_time, weekly, start, now)
+    text, dids = build_leaderboard_text(all_time, weekly, start, now,
+                                        db.flag_scores())
     uri = bluesky.post_text(text, kind="leaderboard", extra_dids=dids)
     _remember(uri, "leaderboard", None)
     logger.info("Posted the weekly standings (%d this week, %d all time)",

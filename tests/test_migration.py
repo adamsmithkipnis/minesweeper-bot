@@ -108,6 +108,93 @@ class MovesTable(unittest.TestCase):
             config.DB_PATH = old
 
 
+class FlagBets(unittest.TestCase):
+    """The flags table as it stood before claims were scored as bets: no
+    withdrawal column, and a plain unique index that would stop a fresh bet
+    on a cell after a withdrawn one."""
+
+    LEGACY = (
+        "CREATE TABLE flags (id INTEGER PRIMARY KEY, game_id INTEGER,"
+        " coord TEXT, did TEXT, handle TEXT, turn_number INTEGER,"
+        " correct INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);"
+        "CREATE UNIQUE INDEX idx_flags_one_per_person"
+        " ON flags (game_id, coord, did);"
+        "INSERT INTO flags (game_id, coord, did, handle, turn_number)"
+        " VALUES (1, 'C3', 'did:a', 'a', 1);"
+    )
+
+    def setUp(self):
+        self._old = config.DB_PATH
+        config.DB_PATH = os.path.join(tempfile.mkdtemp(), "legacy_bets.db")
+        conn = sqlite3.connect(config.DB_PATH)
+        conn.executescript(self.LEGACY)
+        conn.commit(); conn.close()
+        db.init_db()
+
+    def tearDown(self):
+        config.DB_PATH = self._old
+
+    def test_an_old_claim_still_shows_and_scores(self):
+        self.assertEqual(db.flag_counts(1), {"C3": 1})
+        db.resolve_flags(1, {"C3": True})
+        self.assertEqual(db.flag_points("did:a", 1), 1)
+
+    def test_a_withdrawn_claim_can_be_placed_again(self):
+        db.withdraw_flag(1, "C3", "did:a", 1)
+        self.assertTrue(db.add_flag(1, "C3", "did:a", "a", 2),
+                        "the old one-row-per-cell index must be gone")
+
+    def test_migrating_twice_is_harmless(self):
+        db.init_db()
+        self.assertEqual(db.flag_counts(1), {"C3": 1})
+
+    def test_a_fresh_database_scores_every_board(self):
+        self.assertEqual(db.flag_scoring_from(), 0)
+        self.assertTrue(db.flag_scoring_active(1))
+
+
+class FlagScoringStartsNextBoard(unittest.TestCase):
+    """Deploying mid-board must not re-score the board in progress: the
+    rules a board started under are the rules it ends under."""
+
+    def setUp(self):
+        self._old = config.DB_PATH
+        config.DB_PATH = os.path.join(tempfile.mkdtemp(), "live_bets.db")
+        conn = sqlite3.connect(config.DB_PATH)
+        conn.executescript(LEGACY_GAME_STATE + FlagBets.LEGACY)
+        conn.execute("INSERT INTO game_state (id, game_id, rows, cols, "
+                     "mine_count, mine_cells, revealed, turn_number, status) "
+                     "VALUES (1, 7, 9, 9, 13, '[]', '[]', 2, 'active')")
+        conn.execute("INSERT INTO flags (game_id, coord, did, handle, "
+                     "turn_number) VALUES (7, 'D4', 'did:a', 'a', 2)")
+        conn.commit(); conn.close()
+        db.init_db()
+
+    def tearDown(self):
+        config.DB_PATH = self._old
+
+    def test_points_begin_with_the_board_after_the_live_one(self):
+        self.assertEqual(db.flag_scoring_from(), 8)
+        self.assertFalse(db.flag_scoring_active(7))
+        self.assertTrue(db.flag_scoring_active(8))
+
+    def test_the_live_board_still_shows_and_resolves_its_flags(self):
+        self.assertEqual(db.flag_counts(7), {"D4": 1})
+        db.resolve_flags(7, {"D4": True})
+        self.assertEqual(db.flag_points("did:a", 7), 0, "no points yet")
+        self.assertEqual(db.flag_scores(7), [], "nothing to announce either")
+
+    def test_the_next_board_scores(self):
+        db.add_flag(8, "C3", "did:a", "a", 1)
+        db.resolve_flags(8, {"C3": True})
+        self.assertEqual(db.flag_points("did:a", 8), 1)
+        self.assertEqual(db.flag_points("did:a"), 1)
+
+    def test_a_second_start_does_not_move_the_line(self):
+        db.init_db()
+        self.assertEqual(db.flag_scoring_from(), 8)
+
+
 class FlagTutorialTable(unittest.TestCase):
     def test_existing_flaggers_are_backfilled_as_experienced_players(self):
         old = config.DB_PATH
