@@ -71,6 +71,32 @@ class ArgumentsAndWorking(unittest.TestCase):
         self.assertEqual(vote("I think A1 or B2, probably B2"), "B2")
 
 
+class Discussion(unittest.TestCase):
+    """Naming cells is not choosing one."""
+
+    def test_the_h1_h2_sword(self):
+        # The reply that opened H2 for somebody who was asking the others.
+        self.assertIsNone(vote("Lol who wants to fall on the H1/H2 sword"))
+
+    def test_questions_to_the_others(self):
+        for text in ("anyone brave enough for C3?", "who's brave enough for D4",
+                     "should we risk E5?", "which one, A1 or B2?",
+                     "any takers for F6"):
+            self.assertIsNone(vote(text), text)
+
+    def test_unsettled_alternatives(self):
+        for text in ("H1/H2", "A1 or B2", "C3, D4, E5 are the 50/50s"):
+            self.assertIsNone(vote(text), text)
+
+    def test_a_voting_word_still_counts_in_a_question(self):
+        self.assertEqual(vote("who else is going D4? I vote D4"), "D4")
+        self.assertEqual(vote("anyone? I'll take H2"), "H2")
+
+    def test_one_tentative_cell_is_still_a_vote(self):
+        self.assertEqual(vote("D4?"), "D4")
+        self.assertEqual(vote("D4, which is safe"), "D4")
+
+
 class DangerSymbols(unittest.TestCase):
     """The most natural way to flag a mine must not open it.
 

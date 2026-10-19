@@ -178,6 +178,16 @@ def find_mentions(text: str, rows: int, cols: int) -> list:
     return out
 
 
+# A reply asking the others — "who wants to fall on the H1/H2 sword", "anyone
+# brave enough for C3?" — names cells without choosing one. In knockout play a
+# misread here opens the cell under the asker's name.
+_ASKS_OTHERS = re.compile(
+    r"\b(?:who|whoever|anyone|anybody|someone|somebody|which (?:one|cell)|should we|"
+    r"shall we|do we|any takers|volunteers?)\b",
+    re.IGNORECASE,
+)
+
+
 # "Unflag D8 and open it" — the pronoun is the cell just unflagged.
 _OPEN_IT = re.compile(
     rf"\b(?:{_VOTE_WORDS})\s+(?:it|that|this|there)\b", re.IGNORECASE)
@@ -189,8 +199,12 @@ def parse_vote(text: str, rows: int, cols: int) -> str | None:
     In order:
       1. the last coordinate introduced by a voting word,
       2. the only coordinate mentioned, if there is exactly one,
-      3. the last coordinate mentioned — people finish on their choice.
-    Coordinates the writer is warning about are never candidates.
+      3. the last coordinate mentioned, when it repeats an earlier one —
+         "A1 or B2, probably B2" settles on B2.
+    Coordinates the writer is warning about are never candidates. Without a
+    voting word, a question to the others or a bare list of alternatives
+    ("H1/H2") is discussion, not a vote: taking the last cell of those is how
+    "who wants to fall on the H1/H2 sword" opened H2.
     """
     candidates = [m for m in find_mentions(text, rows, cols)
                   if not m.is_warning and not m.is_unflag]
@@ -205,11 +219,17 @@ def parse_vote(text: str, rows: int, cols: int) -> str | None:
     if chosen:
         return chosen[-1]
 
+    if _ASKS_OTHERS.search(text or ""):
+        return None
+
     distinct = {m.coord for m in candidates}
     if len(distinct) == 1:
         return candidates[0].coord
 
-    return candidates[-1].coord
+    last = candidates[-1].coord
+    if last in {m.coord for m in candidates[:-1]}:
+        return last
+    return None
 
 
 def parse_flags(text: str, rows: int, cols: int) -> tuple:
