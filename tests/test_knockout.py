@@ -147,6 +147,37 @@ class CascadeCollisions(unittest.TestCase):
                          [("second", consumed)])
         self.assertEqual(duplicates, [])
 
+    def test_a_move_consumed_by_an_earlier_cascade_scores_a_point(self):
+        """The call was right; somebody else's cascade only got there first.
+        The point is recorded like a move, so it reaches the board total,
+        the all-time total and the leaderboard without a second path."""
+        state = game.new_game(1, rng=random.Random(5), mine_budget=2)
+        first, consumed = self._cascade_pair(state)
+        position = solver.Position.from_state(state)
+        analysis = solver.analyze(position)
+        already = {game.index_to_coord(r, c) for r, c in state.revealed}
+
+        sent = []
+        real = (main._post_board, main.bluesky.post_reply, main._remember)
+        main._post_board = lambda *a, **k: "at://board/1"
+        main.bluesky.post_reply = lambda text, **kw: (
+            sent.append(text) or "at://sent/1")
+        main._remember = lambda *a, **k: None
+        try:
+            main._play_knockout_turn(
+                state,
+                [reply("did:first", first, "1"),
+                 reply("did:second", consumed, "2")],
+                already, position, analysis, {}, {})
+        finally:
+            main._post_board, main.bluesky.post_reply, main._remember = real
+
+        self.assertEqual(db.player_points("did:second", state.game_id),
+                         main.CASCADE_CREDIT)
+        self.assertGreater(db.player_points("did:first", state.game_id), 1)
+        self.assertTrue(any(f"{consumed} was valid" in t
+                            and "+1 point" in t for t in sent), sent)
+
     def test_calling_the_same_cell_is_preserved_as_a_duplicate(self):
         state = game.new_game(1, rng=random.Random(5), mine_budget=2)
         first, _ = self._cascade_pair(state)
@@ -184,7 +215,8 @@ class CascadeCollisions(unittest.TestCase):
         text, kwargs = sent[0]
         self.assertIn("E3 was valid", text)
         self.assertIn("cascade opened it", text)
-        self.assertIn("earned 0 points", text)
+        self.assertIn("+1 point for the right call", text)
+        self.assertNotIn("0 points", text)
         self.assertIn("Turn 14 is now open", text)
         self.assertEqual(kwargs["parent_uri"], move.reply.uri)
         self.assertLessEqual(len(text), 300)
