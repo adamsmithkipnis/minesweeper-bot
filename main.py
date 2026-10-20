@@ -417,7 +417,21 @@ def build_knockout_credit_reply(state: game.GameState, play,
 
 # A move whose cell an earlier move's cascade opened first was still the
 # right call, so it scores a point even though it opened nothing itself.
+# Players named it the Pity Point, so the reply does too.
 CASCADE_CREDIT = 1
+
+# Each must say the cell was valid, that a cascade opened it, and what it
+# scored; {coord} and {points} are filled in.
+PITY_POINT_LINES = (
+    "🫶 Pity Point! {coord} was valid, but an earlier move's cascade opened "
+    "it before yours was applied. +{points} for the right call.",
+    "🌊 {coord} was valid, but an earlier move's cascade opened it before "
+    "yours landed. Have a Pity Point: +{points} for the right call.",
+    "🫠 So close. {coord} was valid, but an earlier move's cascade opened it "
+    "first. Please accept this Pity Point with our condolences: +{points}.",
+    "🏅 Introducing the Pity Point: {coord} was valid, but an earlier move's "
+    "cascade opened it first. +{points}, and the board owes you one.",
+)
 
 
 def build_cascade_skip_reply(state: game.GameState, move) -> str:
@@ -427,10 +441,14 @@ def build_cascade_skip_reply(state: game.GameState, move) -> str:
                      f"newest board post to play.")
     else:
         next_step = "That move finished the board; the next board begins soon."
+    # Seeded by the move, so a retried post says the same thing.
+    line = random.Random(
+        f"{state.game_id}:{state.turn_number}:{move.coord}:{move.did}"
+    ).choice(PITY_POINT_LINES)
     return _with_tags(
-        f"✅ {move.coord} was valid, but an earlier move's cascade opened it "
-        f"before yours was applied. +{_plural(CASCADE_CREDIT, 'point')} for "
-        f"the right call.\n\n{next_step}",
+        line.format(coord=move.coord,
+                    points=_plural(CASCADE_CREDIT, 'point'))
+        + f"\n\n{next_step}",
         tags=[config.REPLY_HASHTAG])
 
 
