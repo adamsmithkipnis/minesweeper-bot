@@ -215,11 +215,34 @@ class CascadeCollisions(unittest.TestCase):
         text, kwargs = sent[0]
         self.assertIn("E3 was valid", text)
         self.assertIn("cascade opened it", text)
-        self.assertIn("+1 point for the right call", text)
+        self.assertIn("Pity Point", text)
+        self.assertIn("+1 point", text)
         self.assertNotIn("0 points", text)
         self.assertIn("Turn 14 is now open", text)
         self.assertEqual(kwargs["parent_uri"], move.reply.uri)
         self.assertLessEqual(len(text), 300)
+
+    def test_every_pity_point_line_names_the_cell_and_the_point(self):
+        """Whichever wording is drawn, the reply stays complete and fits."""
+        state = game.new_game(1, rng=random.Random(5), mine_budget=2)
+        state.turn_number = 14
+        seen = set()
+        for col in "ABCDEFGHIJ":
+            for row in range(1, 11):
+                coord = f"{col}{row}"
+                move = votes.Move("did:a", "a.bsky.social", coord,
+                                  reply("did:a", coord))
+                text = main.build_cascade_skip_reply(state, move)
+                seen.add(text.split(coord)[0])
+                self.assertIn(f"{coord} was valid", text)
+                self.assertIn("cascade opened it", text)
+                self.assertIn("Pity Point", text)
+                self.assertIn("+1 point", text)
+                self.assertIn("Turn 14 is now open", text)
+                self.assertLessEqual(len(text), 300)
+                self.assertEqual(text,
+                                 main.build_cascade_skip_reply(state, move))
+        self.assertEqual(len(seen), len(main.PITY_POINT_LINES))
 
     def test_a_finishing_cascade_does_not_claim_a_new_turn_is_open(self):
         state = game.new_game(1, rng=random.Random(5), mine_budget=2)
