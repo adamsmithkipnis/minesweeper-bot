@@ -415,16 +415,22 @@ def build_knockout_credit_reply(state: game.GameState, play,
         tags=[config.REPLY_HASHTAG])
 
 
+# A move whose cell an earlier move's cascade opened first was still the
+# right call, so it scores a point even though it opened nothing itself.
+CASCADE_CREDIT = 1
+
+
 def build_cascade_skip_reply(state: game.GameState, move) -> str:
-    """Explain why a valid move earned nothing after an earlier cascade."""
+    """Explain why a valid move earned one point after an earlier cascade."""
     if state.status == game.ACTIVE:
         next_step = (f"Turn {state.turn_number} is now open — reply to the "
                      f"newest board post to play.")
     else:
         next_step = "That move finished the board; the next board begins soon."
     return _with_tags(
-        f"⏭️ {move.coord} was valid, but an earlier move's cascade opened it "
-        f"before yours was applied, so it earned 0 points.\n\n{next_step}",
+        f"✅ {move.coord} was valid, but an earlier move's cascade opened it "
+        f"before yours was applied. +{_plural(CASCADE_CREDIT, 'point')} for "
+        f"the right call.\n\n{next_step}",
         tags=[config.REPLY_HASHTAG])
 
 
@@ -836,9 +842,10 @@ def apply_knockout_moves(state: game.GameState, replies: list,
 
     Returns ``(plays, source, superseded, duplicates)``.  ``superseded``
     contains valid moves whose cells were opened by an earlier move's
-    flood-fill during this same turn. ``duplicates`` contains later callers
-    of the exact cell another player opened first. Neither scores, but both
-    callers deserve an answer explaining why their move disappeared.
+    flood-fill during this same turn; each scores CASCADE_CREDIT, since the
+    call was right. ``duplicates`` contains later callers of the exact cell
+    another player opened first, which score nothing. Both kinds of caller
+    deserve an answer explaining why their move disappeared.
 
     Order is by reply time, so the earliest replier acts first. A cell that
     somebody else's cascade already opened is skipped without penalty — being
@@ -1723,6 +1730,9 @@ def _play_knockout_turn(state: game.GameState, replies: list,
         for play in plays:
             leaders = leaders_with_pending_move(leaders, play.did, play.handle,
                                                 play.points)
+        for move in superseded:
+            leaders = leaders_with_pending_move(leaders, move.did, move.handle,
+                                                CASCADE_CREDIT)
         text = build_knockout_gameover_text(
             state, record, max(0, entrants - len(eliminated)), entrants,
             build_mvp_line(leaders),
@@ -1750,11 +1760,22 @@ def _play_knockout_turn(state: game.GameState, replies: list,
                                game.coord_to_index(play.coord) in analysis.safe))
         except Exception:
             logger.exception("Failed to record move %s", play.coord)
+    for move in superseded:
+        try:
+            db.record_move(state, move.coord, game.SAFE, source,
+                           caller=move.handle, did=move.did,
+                           points=CASCADE_CREDIT,
+                           was_provably_safe=(
+                               game.coord_to_index(move.coord) in analysis.safe))
+        except Exception:
+            logger.exception("Failed to record cascade credit %s", move.coord)
 
     _credit_knockout_players(state, plays)
     _notify_cascade_skips(state, superseded)
     _notify_duplicate_skips(state, duplicates)
-    _announce_milestones(state, [(p.did, p.handle, p.points) for p in plays])
+    _announce_milestones(state, [(p.did, p.handle, p.points) for p in plays]
+                         + [(m.did, m.handle, CASCADE_CREDIT)
+                            for m in superseded])
 
     if not finished:
         _resolve_flags(state, last.coord, last.result, revealed_before)
