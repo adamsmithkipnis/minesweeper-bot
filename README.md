@@ -308,6 +308,7 @@ while ignoring the variable would have thrown away a tag added by hand.
 | `dashboard.py` | Read-only local dashboard |
 | `reset.py` | Wipe posts and/or local data for a clean slate |
 | `deploy.sh` | Pull, test, restart — the whole deployment |
+| `status.sh` | Read-only report: deployed commit, services, errors, big board |
 | `tests/` | Unit tests, the pacing simulator, the dry run, board previews |
 
 ## Setup
@@ -350,6 +351,11 @@ aborts the deploy and leaves the running board untouched.
 
 Install `com.minesweeper.deploy.plist` and the Mini polls origin every five
 minutes, which means nothing has to be typed anywhere to ship a change.
+
+To check on it, `./status.sh` reports the deployed commit against origin,
+whether the bot and the watcher are running, the latest deploy, errors in
+the last 24 hours (`--hours N` to widen), board starts, and the big-board
+schedule, ending in `OK` or `ATTENTION`.
 
 ## Testing
 
