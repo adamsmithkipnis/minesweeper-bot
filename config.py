@@ -195,6 +195,15 @@ if not HASHTAG_POOL:        # no file and no override: stay findable anyway
 MILESTONES = sorted(int(n) for n in os.environ.get(
     "MILESTONES", "100 500 1000 2500 5000 10000 25000 50000").split())
 
+# Distinct days played worth a badge post — a day being any local date
+# (LEADERBOARD_TZ) with a recorded move or flag claim. The point ladder starts
+# at 100, which a newcomer does not reach in their first week; this one
+# rewards coming back, which is where players are lost: in Sep–Oct 2026, 18
+# of 48 monthly players had played on only one day. The first rung is the
+# one the first-move welcome promises. Empty turns the ladder off.
+DAY_MILESTONES = sorted(int(n) for n in os.environ.get(
+    "DAY_MILESTONES", "2 3 7 14 30 60 100").split())
+
 # How often to record the account's follower count, in minutes. 0 turns the
 # history off. It is a record for the owner, never posted anywhere.
 FOLLOWER_SNAPSHOT_MINUTES = int(os.environ.get("FOLLOWER_SNAPSHOT_MINUTES", "60"))

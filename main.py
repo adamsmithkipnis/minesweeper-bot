@@ -391,7 +391,8 @@ def build_ignored_flag_reply(cells: dict) -> str:
 
 
 def build_knockout_credit_reply(state: game.GameState, play,
-                                this_board: int, all_time: int) -> str:
+                                this_board: int, all_time: int,
+                                first_move: bool = False) -> str:
     """Tell one player what their move did and what they are on.
 
     Every player acts every turn in knockout, so this is the only place most
@@ -408,10 +409,12 @@ def build_knockout_credit_reply(state: game.GameState, play,
         head = (f"🎯 You opened {play.coord} on turn {state.turn_number} — "
                 f"it {_outcome_phrase(state, play.coord, play.result)}.")
         scored = f"\n+{_plural(play.points, 'point')}"
+    welcome = f"\n\n{build_welcome_line()}" if first_move else ""
     return _with_tags(
         f"{head}\n{scored}\n"
         f"This board: {this_board}\n"
-        f"All time: {all_time}",
+        f"All time: {all_time}"
+        f"{welcome}",
         tags=[config.REPLY_HASHTAG])
 
 
@@ -482,9 +485,35 @@ def build_stale_post_reply() -> str:
         tags=[config.REPLY_HASHTAG])
 
 
+def build_welcome_line() -> str:
+    """The extra line a player's first-ever move reply carries.
+
+    A first move is the moment somebody has shown they want to play, and
+    the second day is where most of them are lost, so the line names the
+    reason to come back rather than just saying hello.
+    """
+    ladder = config.DAY_MILESTONES
+    if not ladder:
+        return "👋 Welcome — that was your first move! Glad you're here."
+    if ladder[0] <= 2:
+        invite = "Come back another day to earn your first badge."
+    else:
+        invite = f"Play on {ladder[0]} different days to earn your first badge."
+    return f"👋 Welcome — that was your first move! {invite}"
+
+
+def _first_move(state: game.GameState, did: str) -> bool:
+    """Best-effort: a failed lookup costs the welcome, never the reply."""
+    try:
+        return not db.moved_before(did, state.game_id, state.turn_number)
+    except Exception:
+        logger.exception("Failed to check for a first move")
+        return False
+
+
 def build_credit_reply(state: game.GameState, coord: str, vote,
                        points: int = 0, this_game: int = 0,
-                       all_time: int = 0) -> str:
+                       all_time: int = 0, first_move: bool = False) -> str:
     """Thank the caller, and tell them what it earned them.
 
     Scores are the point of coming back: a move is worth the cells it
@@ -498,12 +527,14 @@ def build_credit_reply(state: game.GameState, coord: str, vote,
     else:
         outcome = f"and it {_outcome_phrase(state, coord)}."
     scored = f"+{_plural(points, 'point')}\n" if points else ""
+    welcome = f"\n\n{build_welcome_line()}" if first_move else ""
     return _with_tags(
         f"🎯 Your call. We opened {coord} on turn {state.turn_number} "
         f"{outcome}\n\n"
         f"{scored}"
         f"This game: {this_game}\n"
-        f"All time: {all_time}",
+        f"All time: {all_time}"
+        f"{welcome}",
         tags=[config.REPLY_HASHTAG])
 
 
@@ -584,7 +615,15 @@ def build_milestone_text(crossings: list) -> str:
     if not crossings:
         return ""
     display, dids = _names(crossings)
-    if len(crossings) == 1:
+    if len(crossings) == 1 and crossings[0].get("kind") == "days":
+        first = crossings[0]
+        lines = [f"📅 BADGE — @{display[0]} has now played on "
+                 f"{first['threshold']} different days."]
+        if first["threshold"] == (config.DAY_MILESTONES or [0])[0]:
+            lines.append("First badge earned. Welcome back!")
+        if first.get("next"):
+            lines.append(f"Next badge: {first['next']} days.")
+    elif len(crossings) == 1:
         first = crossings[0]
         head = (f"🏆 MILESTONE — @{display[0]} just passed "
                 f"{_comma(first['threshold'])} points.")
@@ -597,6 +636,10 @@ def build_milestone_text(crossings: list) -> str:
     else:
         lines = ["🏆 MILESTONES"]
         for name, crossing in zip(display, crossings):
+            if crossing.get("kind") == "days":
+                lines.append(f"@{name} played on {crossing['threshold']} "
+                             f"different days 📅")
+                continue
             lines.append(f"@{name} passed {_comma(crossing['threshold'])} "
                          f"({_comma(crossing['points'])} all time)")
     # Drop from the bottom — the rung and the name are the post; the rest is
@@ -637,6 +680,34 @@ def milestone_crossings(did: str, handle: str, total: int, earned: int,
     # Several rungs at once means a backfilled player we are meeting for the
     # first time mid-cascade; announce the highest, which is the true news.
     return crossings[-1:]
+
+
+def day_crossings(did: str, handle: str, game_id: int | None = None,
+                  now: datetime | None = None) -> list:
+    """Claim and describe any days-played rung this player has just reached.
+
+    The same claim-then-post contract as `milestone_crossings`. The silent
+    backfill is measured on the days *before* today, so switching this on
+    does not badge a regular for their seventh day weeks after the fact,
+    while somebody whose second day is today is still congratulated.
+    """
+    if not did or not config.DAY_MILESTONES:
+        return []
+    ladder = list(config.DAY_MILESTONES)
+    tz = _leaderboard_tz()
+    today = (now or datetime.now(timezone.utc)).astimezone(tz).date()
+    days = db.play_days(did, tz)
+    db.backfill_milestones(did, len({d for d in days if d < today}), ladder,
+                           kind="days")
+    thresholds = db.claim_milestones(did, len(days), ladder, game_id,
+                                     kind="days")
+    if not thresholds:
+        return []
+    threshold = thresholds[-1]
+    later = [t for t in ladder if t > threshold]
+    return [{"did": did, "handle": handle, "kind": "days",
+             "threshold": threshold, "points": len(days),
+             "next": later[0] if later else 0}]
 
 
 def build_leaderboard_text(all_time: list, weekly: list, week_start,
@@ -1160,7 +1231,8 @@ def _credit_knockout_players(state: game.GameState, plays: list) -> None:
             text = build_knockout_credit_reply(
                 state, play,
                 db.player_points(play.did, state.game_id),
-                db.player_points(play.did))
+                db.player_points(play.did),
+                first_move=_first_move(state, play.did))
             uri = bluesky.post_reply(text, parent_uri=play.reply_uri,
                                      parent_cid=play.reply_cid,
                                      root_uri=play.root_uri,
@@ -1311,15 +1383,25 @@ def _announce_milestones(state: game.GameState, movers: list) -> None:
     out — and a claim whose post failed is handed back so the next turn can
     try again.
     """
-    crossings = []
+    crossings, seen = [], set()
     for did, handle, earned in movers:
-        if not did or earned <= 0:
+        if not did:
             continue
+        if earned > 0:
+            try:
+                crossings.extend(milestone_crossings(
+                    did, handle, db.player_points(did), earned, state.game_id))
+            except Exception:
+                logger.exception("Failed to check milestones for %s", handle)
+        # A day is played whatever the move scored, a mine included, and
+        # counted once however many moves the player has in this turn.
+        if did in seen:
+            continue
+        seen.add(did)
         try:
-            crossings.extend(milestone_crossings(
-                did, handle, db.player_points(did), earned, state.game_id))
+            crossings.extend(day_crossings(did, handle, state.game_id))
         except Exception:
-            logger.exception("Failed to check milestones for %s", handle)
+            logger.exception("Failed to check day badges for %s", handle)
     if not crossings:
         return
 
@@ -1328,14 +1410,15 @@ def _announce_milestones(state: game.GameState, movers: list) -> None:
         uri = bluesky.post_text(text, kind="milestone", extra_dids=dids)
         _remember(uri, "milestone", state.game_id, state.turn_number)
         for crossing in crossings:
-            logger.info("Milestone: %s passed %d (%d all time)",
+            logger.info("Milestone: %s passed %d %s (%d all time)",
                         crossing["handle"], crossing["threshold"],
-                        crossing["points"])
+                        crossing.get("kind", "points"), crossing["points"])
     except Exception:
         logger.exception("Failed to post a milestone; releasing the claims")
         for crossing in crossings:
             try:
-                db.release_milestones(crossing["did"], [crossing["threshold"]])
+                db.release_milestones(crossing["did"], [crossing["threshold"]],
+                                      kind=crossing.get("kind", "points"))
             except Exception:
                 logger.exception("Failed to release a milestone claim")
 
@@ -1656,7 +1739,8 @@ def _game_tick() -> None:
                 build_credit_reply(
                     state, coord, vote, points,
                     db.player_points(caller_did, state.game_id),
-                    db.player_points(caller_did)),
+                    db.player_points(caller_did),
+                    first_move=_first_move(state, caller_did)),
                 parent_uri=vote.caller.uri, parent_cid=vote.caller.cid,
                 root_uri=vote.caller.root_uri, root_cid=vote.caller.root_cid)
             _remember(reply_uri, "credit", state.game_id, state.turn_number)
