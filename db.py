@@ -975,6 +975,20 @@ _CLAIM_POINTS = """CASE
     ELSE 0 END"""
 
 
+def get_setting(key: str, default: str = "") -> str:
+    with _connect() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?",
+                           (key,)).fetchone()
+    return row["value"] if row and row["value"] is not None else default
+
+
+def set_setting(key: str, value: str) -> None:
+    with _connect() as conn:
+        conn.execute("INSERT INTO settings (key, value) VALUES (?, ?) "
+                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                     (key, value))
+
+
 def flag_scoring_from() -> int:
     """The first board whose flags count for points (0 = all of them)."""
     with _connect() as conn:

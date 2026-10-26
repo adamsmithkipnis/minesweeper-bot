@@ -77,6 +77,31 @@ TIERS = _parse_tiers(os.environ.get(
 KNOCKOUT = os.environ.get("KNOCKOUT", "0").lower() not in ("0", "false", "no")
 MINE_BUDGET_BASE = int(os.environ.get("MINE_BUDGET_BASE", "1"))
 
+# Massive Monday: one oversized board a week, knockout only. It is the first
+# board to start on MASSIVE_DAY (local to LEADERBOARD_TZ), regular boards
+# wait until it finishes, and the ladder then picks up where it left off.
+# The board grows through the month — the first week's day gets the first
+# size, the fourth (and a fifth, when the month has one) gets the last.
+#
+# Measured with tests/simulate.py at six players and 30-minute turns, with
+# the board absorbing MASSIVE_MINE_BUDGET mines:
+#
+#                     budget 3          budget 5
+#   14x14 / 31 (16%)  93%  8h          100%  8h
+#   18x18 / 52 (16%)  64% 12h           96% 14h
+#   22x22 / 77 (16%)  47% 16h           84% 23h
+#   26x26 / 88 (13%)  79% 17h           92% 19h
+#   26x26 /108 (16%)  24% 16h           59% 31h
+#
+# The regular top tier's budget of 3 would lose half the 22x22 boards, so the
+# big board gets its own. 13% on the last week is what keeps a 26x26 inside a
+# day: at 16% it clears 59% and takes over a day. Empty MASSIVE_DAY turns it
+# off; voting mode never runs it (a 22x22 needs ~160 voted turns, 80 hours).
+MASSIVE_DAY = os.environ.get("MASSIVE_DAY", "mon").strip().lower()[:3]
+MASSIVE_BOARDS = _parse_tiers(os.environ.get(
+    "MASSIVE_BOARDS", "14x14:31, 18x18:52, 22x22:77, 26x26:88"))
+MASSIVE_MINE_BUDGET = int(os.environ.get("MASSIVE_MINE_BUDGET", "5"))
+
 # How many turns a knocked-out player sits out before they can act again.
 # 0 benches them for the whole board, which is only tolerable with a large
 # crowd: measured, at two active players a tier-2 elimination costs a median
