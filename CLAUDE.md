@@ -68,7 +68,14 @@ or in the Battleship bot:
 
 ## Operating the bot
 
+When asked how the bot is doing, whether a deploy landed, or about errors or
+the big board, run `./status.sh` and report its output; do not piece it
+together from the individual commands below. It is read-only, ends with
+`OK` or `ATTENTION` and the reasons, and exits 0 or 1 to match.
+
 ```bash
+./status.sh                                             # the whole picture, last 24h
+./status.sh --hours 72                                  # a longer window
 launchctl list | grep minesweeper                       # is it running
 launchctl kickstart -k gui/$(id -u)/com.minesweeper.bot # restart
 tail -f minesweeper.log                                 # watch it
