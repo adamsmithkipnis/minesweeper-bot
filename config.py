@@ -101,6 +101,11 @@ MASSIVE_DAY = os.environ.get("MASSIVE_DAY", "mon").strip().lower()[:3]
 MASSIVE_BOARDS = _parse_tiers(os.environ.get(
     "MASSIVE_BOARDS", "14x14:31, 18x18:52, 22x22:77, 26x26:88"))
 MASSIVE_MINE_BUDGET = int(os.environ.get("MASSIVE_MINE_BUDGET", "5"))
+# No big board before this local date (YYYY-MM-DD; empty for no limit). It
+# shipped on Sun Oct 25, 2026, and without this the next morning — the
+# fourth Monday — would have opened a surprise 26x26 instead of the planned
+# first-week 14x14 on Nov 2.
+MASSIVE_START = os.environ.get("MASSIVE_START", "2026-11-02").strip()
 
 # How many turns a knocked-out player sits out before they can act again.
 # 0 benches them for the whole board, which is only tolerable with a large

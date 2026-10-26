@@ -29,7 +29,7 @@ class _Config(unittest.TestCase):
                        config.MASSIVE_BOARDS, config.MASSIVE_MINE_BUDGET,
                        config.TIERS, config.ADAPTIVE_BOARD,
                        config.LEADERBOARD_TZ, config.POST_MODE,
-                       config.DRY_DIR)
+                       config.DRY_DIR, config.MASSIVE_START)
         config.DB_PATH = os.path.join(tempfile.mkdtemp(), "massive.db")
         config.KNOCKOUT = True
         config.MASSIVE_DAY = "mon"
@@ -39,13 +39,14 @@ class _Config(unittest.TestCase):
         config.TIERS = [(9, 9, 13), (10, 10, 18), (11, 11, 24)]
         config.ADAPTIVE_BOARD = True
         config.LEADERBOARD_TZ = "America/Los_Angeles"
+        config.MASSIVE_START = "2026-11-02"
         db.init_db()
 
     def tearDown(self):
         (config.DB_PATH, config.KNOCKOUT, config.MASSIVE_DAY,
          config.MASSIVE_BOARDS, config.MASSIVE_MINE_BUDGET, config.TIERS,
          config.ADAPTIVE_BOARD, config.LEADERBOARD_TZ, config.POST_MODE,
-         config.DRY_DIR) = self._saved
+         config.DRY_DIR, config.MASSIVE_START) = self._saved
 
     def board(self, rows, cols, mines, status=game.ACTIVE, budget=5):
         state = game.new_game(1, rows=rows, cols=cols, mines=mines,
@@ -84,6 +85,25 @@ class WhenItRuns(_Config):
         db.set_setting("massive_last_date", "2026-11-02")
         self.assertIsNone(main.massive_board_for(MONDAYS[0]))
         self.assertIsNotNone(main.massive_board_for(MONDAYS[1]))
+
+    def test_nothing_before_the_start_date(self):
+        """It shipped on Sun Oct 25; the next morning was the fourth Monday,
+        which would have opened a surprise 26x26 a week early."""
+        oct_26 = datetime(2026, 10, 26, 0, 5, tzinfo=PACIFIC)
+        self.assertIsNone(main.massive_board_for(oct_26))
+        self.assertEqual(main.massive_board_for(MONDAYS[0]), (14, 14, 31))
+
+    def test_the_shipped_default_starts_on_november_2(self):
+        # Read from the source, not reloaded: reloading config would reset
+        # every setting the rest of the suite has arranged.
+        with open(config.__file__) as handle:
+            self.assertIn('os.environ.get("MASSIVE_START", "2026-11-02")',
+                          handle.read())
+
+    def test_an_empty_start_date_is_no_limit(self):
+        config.MASSIVE_START = ""
+        self.assertIsNotNone(
+            main.massive_board_for(datetime(2026, 10, 26, 9, tzinfo=PACIFIC)))
 
     def test_never_in_voting_mode(self):
         config.KNOCKOUT = False
