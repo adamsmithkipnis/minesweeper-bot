@@ -129,14 +129,16 @@ floored boards: recognition, never a losing record anybody has to shake.
 
 ### Check marks
 
-`check D4`, or a tick next to the cell (`✅ D4`, `D4 ✔️`, `☑️ D4`), marks it
+`check D4`, or a tick or ❓ next to the cell (`✅ D4`, `D4 ✔️`, `❓ D4`), marks it
 for a second look: probably a mine, not sure enough to bet a flag on. It is
 a note to the other players and nothing more. It costs no turn and scores
 nothing, it is never read as a move, and a flag on the same cell is the one
 drawn. One shared mark per cell; anyone can clear it with `uncheck D4`, and
-it disappears when the cell opens. The board shows a ✔️ and the alt
-text a `C`. Each player gets one reply the first time, which also says how
-to open the cell, because before this `check D4` was read as a move to D4.
+it disappears when the cell opens. The board shows a black `?`, classic
+Minesweeper's "not sure" mark; the alt text uses `C`, because `?` already
+means a hidden cell there. Each player gets one reply the first time, which
+also says how to open the cell, because before this `check D4` was read as
+a move to D4.
 
 ### Knockout play
 

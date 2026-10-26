@@ -26,13 +26,18 @@ class Parsing(unittest.TestCase):
 
     def test_the_word_and_every_tick_mark_it(self):
         for text in ("check D4", "Check d4", "checking D4", "✅ D4", "D4 ✅",
-                     "✔️ D4", "D4 ✔", "☑️ D4", "✓ D4"):
+                     "✔️ D4", "D4 ✔", "☑️ D4", "✓ D4", "❓ D4", "D4 ❓"):
             self.assertEqual(self.checks(text), ({"D4"}, set()), text)
 
     def test_a_check_is_never_a_move(self):
         """The change players will feel: "check D4" used to open D4."""
-        for text in ("check D4", "✅ D4", "D4 ✅"):
+        for text in ("check D4", "✅ D4", "D4 ✅", "❓ D4"):
             self.assertIsNone(votes.parse_vote(text, 9, 9), text)
+
+    def test_a_plain_question_mark_is_still_just_a_question(self):
+        """"D4?" is how people ask each other things; only ❓ marks."""
+        self.assertEqual(self.checks("D4?"), (set(), set()))
+        self.assertEqual(self.checks("D4 or E5?"), (set(), set()))
 
     def test_nor_a_flag(self):
         self.assertEqual(votes.parse_flags("check D4", 9, 9), (set(), set()))
@@ -173,24 +178,24 @@ class Showing(unittest.TestCase):
         marked = renderer.render_board(state, checks={hidden[0]})
         self.assertNotEqual(plain, marked)
 
-    def test_the_board_draws_the_emoji_itself(self):
-        """Players type ✔️, so the board shows ✔️ — where the font exists."""
-        if renderer._check_glyph(32) is None:
-            self.skipTest("no Apple Color Emoji on this machine")
-        glyph = renderer._check_glyph(32)
-        self.assertEqual(glyph.mode, "RGBA")
-        self.assertLessEqual(max(glyph.size), 32)
-
-    def test_without_the_font_it_still_draws_a_check(self):
+    def test_the_board_draws_a_question_mark(self):
+        """Classic Minesweeper's "not sure" mark: black, on a raised tile,
+        with no tick anywhere — a tick read as "safe" to some players."""
         state, hidden = self.board()
-        saved = renderer._EMOJI_FONT
-        renderer._EMOJI_FONT, renderer._check_glyphs = "/no/such/font", {}
-        try:
-            plain = renderer.render_board(state, checks=())
-            marked = renderer.render_board(state, checks={hidden[0]})
-        finally:
-            renderer._EMOJI_FONT, renderer._check_glyphs = saved, {}
-        self.assertNotEqual(plain, marked)
+        r, c = game.coord_to_index(hidden[0])
+        png = renderer.render_board(state, checks={hidden[0]})
+        from io import BytesIO
+        from PIL import Image
+        img = Image.open(BytesIO(png)).convert("RGB")
+        x0 = (renderer.OUTER_BEVEL + renderer.PAD + renderer.LABEL_LEFT
+              + renderer.PANEL_BEVEL + c * renderer.CELL)
+        y0 = (renderer.OUTER_BEVEL + renderer.PAD + renderer.HEADER_H
+              + renderer.PAD + renderer.LABEL_TOP + renderer.PANEL_BEVEL
+              + r * renderer.CELL)
+        tile = img.crop((x0, y0, x0 + renderer.CELL, y0 + renderer.CELL))
+        colours = {colour for _, colour in tile.getcolors(10000)}
+        self.assertIn((0, 0, 0), colours, "no black glyph on the tile")
+        self.assertNotIn((0, 128, 0), colours, "the old green tick")
 
     def test_the_explanation_fits_and_says_how_to_open(self):
         for coords in (["D4"], ["J10", "J11", "K10", "K11"]):

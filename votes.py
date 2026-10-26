@@ -69,10 +69,10 @@ _NEGATION_BEFORE = re.compile(
     re.IGNORECASE,
 )
 
-# "check D4" or "✅ D4" marks a cell as worth a second look: probably a mine,
+# "check D4", "✅ D4" or "❓ D4" marks a cell as worth a second look: probably a mine,
 # but not sure enough to bet a flag on. It is a note to the other players,
 # never a request to open the cell, and it scores nothing.
-_CHECKS = "\u2705\u2714\u2611\u2713"          # ✅ ✔ ☑ ✓ (with or without FE0F)
+_CHECKS = "\u2705\u2714\u2611\u2713\u2753"    # ✅ ✔ ☑ ✓ ❓ (with or without FE0F)
 _CHECK_BEFORE = re.compile(
     rf"(?:\bcheck(?:ing|ed)?\b|[{_CHECKS}])[^A-Za-z0-9]{{0,6}}$", re.IGNORECASE)
 _CHECK_AFTER = re.compile(rf"^[^A-Za-z0-9]{{0,4}}[{_CHECKS}]")
