@@ -545,50 +545,15 @@ def _draw_flag(draw, box):
                   (x0 + w * 0.26, y0 + h * 0.36)], fill="#FF0000")
 
 
-# The check mark is the ✔️ emoji itself, so the board shows what players
-# type. Apple Color Emoji is a bitmap font with fixed sizes; 160 is the one
-# Pillow can load, and the glyph is scaled down from there.
-_EMOJI_FONT = "/System/Library/Fonts/Apple Color Emoji.ttc"
-CHECK_EMOJI = "\u2714\ufe0f"
-CHECK_INK = "#3C3C3C"       # the emoji's grey, for the drawn fallback
-_check_glyphs = {}
+def _draw_check(draw, box, font):
+    """A cell marked to check: a bold black question mark on the tile.
 
-
-def _check_glyph(size: int):
-    """The ✔️ emoji as an RGBA tile `size` across, or None without the font."""
-    if size not in _check_glyphs:
-        glyph = None
-        try:
-            font = ImageFont.truetype(_EMOJI_FONT, 160)
-            canvas = Image.new("RGBA", (200, 200), (0, 0, 0, 0))
-            ImageDraw.Draw(canvas).text((0, 0), CHECK_EMOJI, font=font,
-                                        embedded_color=True)
-            box = canvas.getbbox()
-            if box:
-                glyph = canvas.crop(box)
-                glyph.thumbnail((size, size), Image.LANCZOS)
-        except Exception:
-            glyph = None
-        _check_glyphs[size] = glyph
-    return _check_glyphs[size]
-
-
-def _draw_check(img, draw, box):
-    """Somebody thinks this one is worth a second look: a ✔️ on the tile.
-
-    Without the emoji font (anywhere but a Mac) it is drawn instead, in the
-    emoji's grey and its shape: a short stroke down, a long one up.
+    Classic Minesweeper's own symbol for "not sure", which is exactly what
+    the mark means. A tick read as "safe" to some people, the opposite.
     """
     x0, y0, x1, y1 = box
-    w, h = x1 - x0, y1 - y0
-    glyph = _check_glyph(int(w * 0.6))
-    if glyph is not None:
-        img.paste(glyph, (int(x0 + (w - glyph.width) / 2),
-                          int(y0 + (h - glyph.height) / 2)), glyph)
-        return
-    draw.line([(x0 + w * 0.24, y0 + h * 0.52), (x0 + w * 0.42, y0 + h * 0.72),
-               (x0 + w * 0.78, y0 + h * 0.26)],
-              fill=CHECK_INK, width=max(4, int(w * 0.14)), joint="curve")
+    draw.text(((x0 + x1) / 2, (y0 + y1) / 2 - 1), "?", fill=TEXT, font=font,
+              anchor="mm")
 
 
 def _draw_mine(draw, box):
@@ -694,7 +659,7 @@ def render_board(state: game.GameState, highlight: str = "",
                 if token == FLAG:
                     _draw_flag(draw, box)
                 elif token == CHECK:
-                    _draw_check(img, draw, box)
+                    _draw_check(draw, box, cell_font)
                 continue
 
             # Opened cells are flat, separated by a single grey rule — the

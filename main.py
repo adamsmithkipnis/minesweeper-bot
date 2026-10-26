@@ -339,8 +339,8 @@ def build_check_reply(coords: list) -> str:
     which = coords[0] if len(coords) == 1 else ", ".join(coords[:3])
     first = coords[0]
     return _with_tags(
-        f"✅ Marked {which} to check — a note to everyone that it might be a "
-        f"mine. It shows as a ✔️ on the board, costs no turn and scores nothing.\n"
+        f"❓ Marked {which} to check — a note to everyone that it might be a "
+        f"mine. It shows as a ? on the board, costs no turn and scores nothing.\n"
         f"Sure it's a mine? 'flag {first}' bets on it. Meant to open it? "
         f"Reply just {first}. 'uncheck {first}' clears the mark.",
         tags=[config.REPLY_HASHTAG])
