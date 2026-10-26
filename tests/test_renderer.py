@@ -139,28 +139,67 @@ class Holidays(unittest.TestCase):
             self.assertEqual(renderer.easter_sunday(day.year), day)
             self.assertEqual(day.weekday(), 6)
 
+    def test_thanksgiving_is_the_fourth_thursday(self):
+        for day in (date(2026, 11, 26), date(2027, 11, 25), date(2028, 11, 23),
+                    date(2030, 11, 28)):
+            self.assertEqual(renderer.thanksgiving(day.year), day)
+
     def test_each_costume_has_its_window_and_no_more(self):
+        H = renderer
         cases = {
             date(2026, 10, 24): None,
-            date(2026, 10, 25): renderer.HALLOWEEN,
-            date(2026, 10, 31): renderer.HALLOWEEN,
+            date(2026, 10, 25): H.HALLOWEEN,
+            date(2026, 10, 31): H.HALLOWEEN,
             date(2026, 11, 1): None,
+            date(2026, 11, 26): H.THANKSGIVING,
+            date(2026, 11, 27): None,
             date(2026, 12, 17): None,
-            date(2026, 12, 18): renderer.CHRISTMAS,
-            date(2026, 12, 25): renderer.CHRISTMAS,
+            date(2026, 12, 18): H.CHRISTMAS,
+            date(2026, 12, 25): H.CHRISTMAS,
             date(2026, 12, 26): None,
+            date(2026, 12, 31): H.NEW_YEAR,
+            date(2027, 1, 1): H.NEW_YEAR,
+            date(2027, 1, 2): None,
+            date(2027, 2, 6): H.LUNAR_NEW_YEAR,
+            date(2027, 2, 14): H.VALENTINES,
+            date(2027, 3, 14): H.PI_DAY,
+            date(2027, 3, 17): H.ST_PATRICKS,
             date(2027, 3, 27): None,
-            date(2027, 3, 28): renderer.EASTER,
+            date(2027, 3, 28): H.EASTER,
             date(2027, 3, 29): None,
+            date(2027, 4, 1): H.APRIL_FOOLS,
             date(2027, 7, 4): None,
+            date(2027, 8, 13): H.FRIDAY_13TH,
+            date(2027, 9, 1): H.BIRTHDAY,
+            date(2027, 9, 13): None,            # a Monday the 13th
         }
         for day, expected in cases.items():
             self.assertEqual(renderer.holiday(day), expected, day)
 
+    def test_easter_outranks_april_fools(self):
+        self.assertEqual(renderer.easter_sunday(2029), date(2029, 4, 1))
+        self.assertEqual(renderer.holiday(date(2029, 4, 1)), renderer.EASTER)
+
+    def test_lunar_new_year_table_is_all_in_its_season(self):
+        for year, day in renderer.LUNAR_NEW_YEARS.items():
+            self.assertEqual(day.year, year)
+            self.assertTrue(date(year, 1, 21) <= day <= date(year, 2, 20), day)
+
+    def test_april_fools_turns_only_the_face_over(self):
+        state = game.new_game(1, rng=random.Random(7))
+        plain = renderer.render_board(state, day=date(2027, 7, 4))
+        fools = renderer.render_board(state, day=date(2027, 4, 1))
+        self.assertNotEqual(plain, fools)
+
     def test_every_costume_renders_in_every_mood(self):
         state = game.new_game(1, rng=random.Random(7))
         plain = renderer.render_board(state, day=date(2026, 7, 4))
-        for day in (date(2026, 10, 31), date(2026, 12, 25), date(2026, 4, 5)):
+        days = [date(2026, 10, 31), date(2026, 12, 25), date(2026, 4, 5),
+                date(2027, 1, 1), date(2027, 2, 14), date(2027, 3, 17),
+                date(2027, 4, 1), date(2027, 3, 14), date(2027, 8, 13),
+                date(2026, 11, 26), date(2027, 2, 6), date(2027, 9, 1)]
+        self.assertEqual(len({renderer.holiday(d) for d in days}), 12)
+        for day in days:
             dressed = renderer.render_board(state, day=day)
             self.assertNotEqual(dressed, plain, day)
             for status in (game.CLEARED, game.EXPLODED):
