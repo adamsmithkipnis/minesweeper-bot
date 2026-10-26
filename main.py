@@ -340,7 +340,7 @@ def build_check_reply(coords: list) -> str:
     first = coords[0]
     return _with_tags(
         f"✅ Marked {which} to check — a note to everyone that it might be a "
-        f"mine. It shows as a green tick, costs no turn and scores nothing.\n"
+        f"mine. It shows as a ✔️ on the board, costs no turn and scores nothing.\n"
         f"Sure it's a mine? 'flag {first}' bets on it. Meant to open it? "
         f"Reply just {first}. 'uncheck {first}' clears the mark.",
         tags=[config.REPLY_HASHTAG])

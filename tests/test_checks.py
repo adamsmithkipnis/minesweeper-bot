@@ -173,6 +173,25 @@ class Showing(unittest.TestCase):
         marked = renderer.render_board(state, checks={hidden[0]})
         self.assertNotEqual(plain, marked)
 
+    def test_the_board_draws_the_emoji_itself(self):
+        """Players type ✔️, so the board shows ✔️ — where the font exists."""
+        if renderer._check_glyph(32) is None:
+            self.skipTest("no Apple Color Emoji on this machine")
+        glyph = renderer._check_glyph(32)
+        self.assertEqual(glyph.mode, "RGBA")
+        self.assertLessEqual(max(glyph.size), 32)
+
+    def test_without_the_font_it_still_draws_a_check(self):
+        state, hidden = self.board()
+        saved = renderer._EMOJI_FONT
+        renderer._EMOJI_FONT, renderer._check_glyphs = "/no/such/font", {}
+        try:
+            plain = renderer.render_board(state, checks=())
+            marked = renderer.render_board(state, checks={hidden[0]})
+        finally:
+            renderer._EMOJI_FONT, renderer._check_glyphs = saved, {}
+        self.assertNotEqual(plain, marked)
+
     def test_the_explanation_fits_and_says_how_to_open(self):
         for coords in (["D4"], ["J10", "J11", "K10", "K11"]):
             text = main.build_check_reply(coords)
