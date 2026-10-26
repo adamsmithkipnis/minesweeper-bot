@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import config
 import game
@@ -632,6 +632,83 @@ def play_days(did: str, tz) -> set:
             continue
         days.add(when.replace(tzinfo=timezone.utc).astimezone(tz).date())
     return days
+
+
+def _activity(game_id: int | None = None) -> list:
+    """Every recorded action by a person, oldest first.
+
+    [{did, handle, points, at}] — a move scores its points, a flag claim
+    scores 0 here, and `at` is the UTC text SQLite wrote. Moves by the bot
+    have no DID and are left out.
+    """
+    where, params = "WHERE did IS NOT NULL AND did != ''", []
+    if game_id is not None:
+        where += " AND game_id = ?"
+        params.append(game_id)
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""SELECT did, caller AS handle, points, created_at AS at
+                FROM moves {where}
+                UNION ALL
+                SELECT did, handle, 0 AS points, created_at AS at
+                FROM flags {where}
+                ORDER BY at""", params + params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def board_players(game_id: int) -> list:
+    """Everybody who opened a cell or planted a flag on this board.
+
+    Best scorer first, then in order of arrival, so a trimmed list keeps the
+    people who carried the board. [{did, handle, points}], one per account,
+    under the handle they used most recently.
+    """
+    players = {}
+    for row in _activity(game_id):
+        entry = players.setdefault(row["did"], {"did": row["did"],
+                                                "handle": "", "points": 0,
+                                                "order": len(players)})
+        entry["handle"] = row["handle"] or entry["handle"]
+        entry["points"] += row["points"] or 0
+    ranked = sorted(players.values(), key=lambda p: (-p["points"], p["order"]))
+    return [{k: p[k] for k in ("did", "handle", "points")} for p in ranked]
+
+
+def weekly_arrivals(since: datetime, gap_days: int = 14) -> tuple:
+    """(newcomers, returners) active since `since`, best scorer first.
+
+    A newcomer's first action ever falls inside the window. A returner had
+    played before, but not in the `gap_days` before the window opened — the
+    people who drifted off and came back. Each is [{did, handle, points}],
+    with points scored inside the window.
+    """
+    start = _utc_text(since)
+    gap = _utc_text(since - timedelta(days=gap_days))
+    seen = {}
+    for row in _activity():
+        entry = seen.setdefault(row["did"], {
+            "did": row["did"], "handle": "", "points": 0, "first": row["at"],
+            "last_before": None, "active": False})
+        entry["handle"] = row["handle"] or entry["handle"]
+        if str(row["at"]) >= start:
+            entry["active"] = True
+            entry["points"] += row["points"] or 0
+        else:
+            entry["last_before"] = str(row["at"])
+    newcomers, returners = [], []
+    for entry in seen.values():
+        if not entry["active"]:
+            continue
+        if str(entry["first"]) >= start:
+            newcomers.append(entry)
+        elif entry["last_before"] and entry["last_before"] < gap:
+            returners.append(entry)
+
+    def ranked(entries):
+        entries.sort(key=lambda e: (-e["points"], str(e["first"])))
+        return [{k: e[k] for k in ("did", "handle", "points")}
+                for e in entries]
+    return ranked(newcomers), ranked(returners)
 
 
 def moved_before(did: str, game_id: int, turn_number: int) -> bool:
