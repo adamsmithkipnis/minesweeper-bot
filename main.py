@@ -428,7 +428,7 @@ def build_knockout_credit_reply(state: game.GameState, play,
         head = (f"💥 You opened {play.coord} on turn {state.turn_number} — "
                 f"a mine. You're out for "
                 f"{_plural(config.ELIMINATION_TURNS, 'turn')}, then you're "
-                f"back. Flag away while you wait.")
+                f"back. You can still flag & check cells while you wait.")
         scored = ""
     else:
         head = (f"🎯 You opened {play.coord} on turn {state.turn_number} — "
