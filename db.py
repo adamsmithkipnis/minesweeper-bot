@@ -157,6 +157,23 @@ CREATE TABLE IF NOT EXISTS milestones (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_milestones_once
     ON milestones (did, threshold);
 
+-- The same ledger for the days-played ladder, where `threshold` is a number
+-- of distinct days and `points` the day count when it was crossed. A table
+-- of its own rather than a kind column, so a day rung of 100 can never
+-- collide with the 100-point rung under the unique index.
+CREATE TABLE IF NOT EXISTS day_milestones (
+    id INTEGER PRIMARY KEY,
+    did TEXT,
+    threshold INTEGER,
+    points INTEGER,
+    game_id INTEGER,
+    announced INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_day_milestones_once
+    ON day_milestones (did, threshold);
+
 -- Replies the bot has already explained itself to (a vote for an open cell,
 -- a reply to an old turn post). Claimed before the answer goes out and
 -- released if it fails, so nobody is told twice however often a tick re-reads
@@ -511,17 +528,24 @@ def _utc_text(when: datetime) -> str:
     return when.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def milestones_reached(did: str) -> set:
+# The two ladders share one shape, so they share the code; `kind` picks the
+# table and is never interpolated from anywhere but here.
+_LADDER_TABLES = {"points": "milestones", "days": "day_milestones"}
+
+
+def milestones_reached(did: str, kind: str = "points") -> set:
     """Rungs this player has already been credited with."""
     if not did:
         return set()
+    table = _LADDER_TABLES[kind]
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT threshold FROM milestones WHERE did = ?", (did,)).fetchall()
+            f"SELECT threshold FROM {table} WHERE did = ?", (did,)).fetchall()
     return {int(r["threshold"]) for r in rows}
 
 
-def backfill_milestones(did: str, points: int, ladder: list) -> int:
+def backfill_milestones(did: str, points: int, ladder: list,
+                        kind: str = "points") -> int:
     """Mark the rungs a player has *already* passed, without announcing them.
 
     Called once per player, the first time they come up, so switching this
@@ -532,20 +556,22 @@ def backfill_milestones(did: str, points: int, ladder: list) -> int:
     """
     if not did:
         return 0
+    table = _LADDER_TABLES[kind]
     with _connect() as conn:
-        seen = conn.execute("SELECT COUNT(*) n FROM milestones WHERE did = ?",
+        seen = conn.execute(f"SELECT COUNT(*) n FROM {table} WHERE did = ?",
                             (did,)).fetchone()["n"]
         if seen:
             return 0
         rows = [(did, t, points) for t in ladder if t <= points]
         conn.executemany(
-            "INSERT OR IGNORE INTO milestones (did, threshold, points, "
+            f"INSERT OR IGNORE INTO {table} (did, threshold, points, "
             "announced) VALUES (?, ?, ?, 0)", rows)
     return len(rows)
 
 
 def claim_milestones(did: str, points: int, ladder: list,
-                     game_id: int | None = None) -> list:
+                     game_id: int | None = None,
+                     kind: str = "points") -> list:
     """Reserve every unawarded rung at or below `points`; return them.
 
     Claiming before posting rather than after is what makes a duplicate
@@ -555,13 +581,14 @@ def claim_milestones(did: str, points: int, ladder: list,
     """
     if not did:
         return []
+    table = _LADDER_TABLES[kind]
     claimed = []
     with _connect() as conn:
         for threshold in ladder:
             if threshold > points:
                 break
             cursor = conn.execute(
-                "INSERT OR IGNORE INTO milestones (did, threshold, points, "
+                f"INSERT OR IGNORE INTO {table} (did, threshold, points, "
                 "game_id, announced) VALUES (?, ?, ?, ?, 1)",
                 (did, threshold, points, game_id))
             if cursor.rowcount:
@@ -569,14 +596,58 @@ def claim_milestones(did: str, points: int, ladder: list,
     return claimed
 
 
-def release_milestones(did: str, thresholds: list) -> None:
+def release_milestones(did: str, thresholds: list,
+                       kind: str = "points") -> None:
     """Undo claims whose post never went out."""
     if not did or not thresholds:
         return
+    table = _LADDER_TABLES[kind]
     with _connect() as conn:
-        conn.executemany("DELETE FROM milestones WHERE did = ? AND "
+        conn.executemany(f"DELETE FROM {table} WHERE did = ? AND "
                          "threshold = ? AND announced = 1",
                          [(did, t) for t in thresholds])
+
+
+def play_days(did: str, tz) -> set:
+    """The local dates on which this account made a move or a flag claim.
+
+    The same definition as a daily active user: one recorded action is a day
+    played, whether it opened a cell, hit a mine or only planted a flag.
+    Stored times are UTC, so the conversion happens here rather than in SQL,
+    which has no idea when daylight saving changes.
+    """
+    if not did:
+        return set()
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT created_at FROM moves WHERE did = ? "
+            "UNION ALL SELECT created_at FROM flags WHERE did = ?",
+            (did, did)).fetchall()
+    days = set()
+    for row in rows:
+        stamp = str(row["created_at"] or "").replace("T", " ").split(".")[0]
+        try:
+            when = datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+        days.add(when.replace(tzinfo=timezone.utc).astimezone(tz).date())
+    return days
+
+
+def moved_before(did: str, game_id: int, turn_number: int) -> bool:
+    """Whether this account has a move on any turn other than this one.
+
+    This turn's own rows are excluded rather than counted, so the answer is
+    the same whether it is asked before or after the turn is recorded.
+    """
+    if not did:
+        return True
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM moves WHERE did = ? "
+            "AND NOT (game_id = ? AND turn_number = ?) LIMIT 1",
+            (did, game_id, turn_number)).fetchone()
+    return row is not None
 
 
 def last_post_at(kind: str) -> datetime | None:
@@ -1034,3 +1105,4 @@ def reset_all(keep_record: bool = False) -> None:
             # Points go with the moves, so the milestones they earned have to
             # go too, or nobody can ever reach their first hundred again.
             conn.execute("DELETE FROM milestones")
+            conn.execute("DELETE FROM day_milestones")
