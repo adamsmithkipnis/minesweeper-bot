@@ -234,9 +234,14 @@ def build_opening_text(state: game.GameState, record: dict) -> str:
     first; the rest is added only while the whole post still fits.
     """
     tier = tier_of(state)
-    banner = (f"💣 NEW BOARD — Tier {tier + 1} · "
-              f"{state.rows}x{state.cols}, {state.mine_count} mines"
-              + (f", {tier + 1}x points." if tier else "."))
+    if is_massive(state):
+        banner = (f"💣💣 {massive_name().upper()} · "
+                  f"{state.rows}x{state.cols}, {state.mine_count} mines, "
+                  f"{tier + 1}x points.")
+    else:
+        banner = (f"💣 NEW BOARD — Tier {tier + 1} · "
+                  f"{state.rows}x{state.cols}, {state.mine_count} mines"
+                  + (f", {tier + 1}x points." if tier else "."))
     ask = (_knockout_ask_line(state, teach_flagging=True) if config.KNOCKOUT
            else _ask_line(state, teach_flagging=True))
     required = f"{banner}\n\n{ask}"
@@ -246,6 +251,11 @@ def build_opening_text(state: game.GameState, record: dict) -> str:
              if config.KNOCKOUT else
              "You pick the rest — one mine ends the run.")
     optional = [f"I opened {state.last_coord} to start us off. {rules}"]
+    if is_massive(state):
+        # Second in line, ahead of the record: it is what makes today's board
+        # a reason to turn up, and why the usual boards have stopped.
+        optional.insert(0, "The weekly big board. It grows every week this "
+                           "month; regular boards resume when it's done.")
     if record["played"]:
         optional.append(f"All time: {record['cleared']} cleared, "
                         f"{record['exploded']} lost.")
@@ -881,6 +891,10 @@ def tier_of(state: game.GameState | None) -> int:
     """
     if state is None or not config.TIERS:
         return 0
+    # The big board pays like the top rung: it is longer and harder than any
+    # of them, and nobody should earn less for turning up to it.
+    if is_massive(state):
+        return len(config.TIERS) - 1
     for index, (rows, cols, _) in enumerate(config.TIERS):
         if (rows, cols) == (state.rows, state.cols):
             return index
@@ -953,6 +967,14 @@ def next_tier(previous: game.GameState | None,
     """
     if previous is None or not config.ADAPTIVE_BOARD:
         return 0
+    # The big board is an interlude, not a rung: the ladder resumes at the
+    # tier it would have used had the big board not happened.
+    if is_massive(previous):
+        try:
+            resume = int(db.get_setting(_MASSIVE_RESUME, "0"))
+        except (TypeError, ValueError):
+            resume = 0
+        return max(0, min(resume, len(config.TIERS) - 1))
     current = tier_of(previous)
     share = participation_of(previous, crowd_moves)
     if previous.status == game.CLEARED:
@@ -962,6 +984,51 @@ def next_tier(previous: game.GameState | None,
     if share < config.SHRINK_PARTICIPATION:
         return max(current - 1, 0)
     return current
+
+
+_MASSIVE_DATE = "massive_last_date"
+_MASSIVE_RESUME = "massive_resume_tier"
+_DAY_NAMES_LONG = {"mon": "Monday", "tue": "Tuesday", "wed": "Wednesday",
+                   "thu": "Thursday", "fri": "Friday", "sat": "Saturday",
+                   "sun": "Sunday"}
+
+
+def massive_name() -> str:
+    """'Massive Monday' — named for whichever day it is configured on."""
+    return f"Massive {_DAY_NAMES_LONG.get(config.MASSIVE_DAY, 'Monday')}"
+
+
+def is_massive(state: game.GameState | None) -> bool:
+    """Whether a board is the weekly big one, by its dimensions.
+
+    Derived like `tier_of`, so nothing new has to be stored on the board. A
+    size that is also a regular tier is never treated as the big board.
+    """
+    if state is None or not config.MASSIVE_BOARDS:
+        return False
+    shape = (state.rows, state.cols)
+    return (shape in {(r, c) for r, c, _ in config.MASSIVE_BOARDS}
+            and shape not in {(r, c) for r, c, _ in config.TIERS})
+
+
+def massive_board_for(when: datetime) -> tuple | None:
+    """(rows, cols, mines) if a board starting at `when` is the big one.
+
+    Knockout only, on the configured day, and once per date: a big board
+    that finishes the same afternoon is followed by a regular one. The size
+    is the week of the month — first week the first size, fourth the last,
+    and a fifth week repeats the last.
+    """
+    if (not config.KNOCKOUT or not config.MASSIVE_BOARDS
+            or config.MASSIVE_DAY not in _DAYS):
+        return None
+    local = when.astimezone(_leaderboard_tz())
+    if _DAYS[local.weekday()] != config.MASSIVE_DAY:
+        return None
+    if db.get_setting(_MASSIVE_DATE) == local.date().isoformat():
+        return None
+    week = min((local.day - 1) // 7, len(config.MASSIVE_BOARDS) - 1)
+    return config.MASSIVE_BOARDS[week]
 
 
 def next_board_settings(previous: game.GameState | None,
@@ -1176,24 +1243,44 @@ def build_knockout_turn_text(state: game.GameState, plays: list,
     return _with_tags(f"{body}\n\n{ask}")
 
 
+def _upcoming_massive(next_board_at) -> str:
+    """'Massive Monday (14x14)' when the next board will be the big one.
+
+    The post before the big board is the only warning anybody gets, so it
+    says so. Best-effort: a failed lookup only loses the heads-up.
+    """
+    if not next_board_at:
+        return ""
+    try:
+        board = massive_board_for(next_board_at)
+    except Exception:
+        logger.exception("Failed to check for an upcoming big board")
+        return ""
+    return f"{massive_name()} ({board[0]}x{board[1]})" if board else ""
+
+
 def build_knockout_gameover_text(state: game.GameState, record: dict,
                                  survivors: int, entrants: int,
                                  mvp_line: str, next_board_at,
                                  flag_line: str = "") -> str:
-    tier = tier_of(state) + 1
+    label = (massive_name() if is_massive(state)
+             else f"Tier {tier_of(state) + 1}")
     if state.status == game.CLEARED:
         head = (f"🎉 BOARD SWEPT in {_plural(state.turn_number, 'turn')} — "
-                f"Tier {tier}.\n"
+                f"{label}.\n"
                 f"{_plural(state.detonations, 'mine')} found the hard way, "
                 f"{survivors} of {entrants} still standing.")
     else:
         head = (f"💥 BOARD LOST — {state.exploded_cell} was one mine too many "
-                f"on Tier {tier}.\n"
+                f"on {label}.\n"
                 f"Cleared {len(state.revealed)} of {state.total_safe} cells; "
                 f"{survivors} of {entrants} still standing.")
 
     next_phrase = (next_board_at.astimezone().strftime("%a %-I:%M %p %Z")
                    if next_board_at else f"in {_restart_phrase()}")
+    upcoming = _upcoming_massive(next_board_at)
+    if upcoming:
+        next_phrase = f"{upcoming}, {next_phrase}"
     required = (f"All time: {record['cleared']} cleared, "
                 f"{record['exploded']} lost.\n"
                 f"Next board: {next_phrase}. Follow to catch the opening.")
@@ -1997,12 +2084,20 @@ def start_new_game() -> None:
         logger.exception("start_new_game failed")
 
 
-def _start_new_game() -> None:
+def _start_new_game(now: datetime | None = None) -> None:
     previous = db.load_state()
     game_id = (previous.game_id + 1) if previous else 1
-    rows, cols, mines = next_board_settings(previous)
+    now = now or datetime.now(timezone.utc)
+    massive = massive_board_for(now)
+    if massive:
+        rows, cols, mines = massive
+        budget = config.MASSIVE_MINE_BUDGET
+        resume = next_tier(previous)
+    else:
+        rows, cols, mines = next_board_settings(previous)
+        budget = mine_budget_for(next_tier(previous))
     state = game.new_game(game_id, rows=rows, cols=cols, mines=mines,
-                          mine_budget=mine_budget_for(next_tier(previous)))
+                          mine_budget=budget)
     logger.info("Starting board %d (%dx%d, %d mines), opened at %s",
                 game_id, state.rows, state.cols, state.mine_count,
                 state.last_coord)
@@ -2016,6 +2111,16 @@ def _start_new_game() -> None:
         # (with no post to read, the bot simply plays its own move).
 
     db.save_state(state)
+    if massive:
+        # Marked once the board exists, so a crash before this point retries
+        # the big board rather than skipping a week of it.
+        try:
+            db.set_setting(_MASSIVE_RESUME, str(resume))
+            db.set_setting(
+                _MASSIVE_DATE,
+                now.astimezone(_leaderboard_tz()).date().isoformat())
+        except Exception:
+            logger.exception("Failed to record the big board's date")
     try:
         db.record_move(state, state.last_coord, game.SAFE, "opening")
     except Exception:

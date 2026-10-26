@@ -121,7 +121,13 @@ def main() -> int:
                         help="everyone acts; a mine knocks out the player")
     parser.add_argument("--keep", action="store_true",
                         help="keep a previous run's output instead of wiping it")
+    parser.add_argument("--massive", type=int, choices=(1, 2, 3, 4),
+                        help="open the big board for that week of the month "
+                             "instead of a regular one (implies --knockout)")
     args = parser.parse_args()
+    if args.massive:
+        args.knockout = True
+        args.turns = max(args.turns, 200)
 
     if not args.keep and os.path.isdir(args.out):
         shutil.rmtree(args.out)
@@ -141,7 +147,15 @@ def main() -> int:
     seed_boards(random.Random(args.seed))
     install_fake_crowd(args.voters, args.skill, random.Random(args.seed + 1))
 
-    bot.start_new_game()
+    if args.massive:
+        # The Mondays of November 2026 are the 2nd, 9th, 16th and 23rd.
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        monday = datetime(2026, 11, 2 + 7 * (args.massive - 1), 9,
+                          tzinfo=ZoneInfo(bot.config.LEADERBOARD_TZ))
+        bot._start_new_game(monday)
+    else:
+        bot.start_new_game()
     for _ in range(args.turns):
         state = db.load_state()
         if state is None or state.status != game.ACTIVE:
