@@ -236,8 +236,7 @@ def build_opening_text(state: game.GameState, record: dict) -> str:
     tier = tier_of(state)
     if is_massive(state):
         banner = (f"💣💣 {massive_name().upper()} · "
-                  f"{state.rows}x{state.cols}, {state.mine_count} mines, "
-                  f"{tier + 1}x points.")
+                  f"{state.rows}x{state.cols}, {state.mine_count} mines.")
     else:
         banner = (f"💣 NEW BOARD — Tier {tier + 1} · "
                   f"{state.rows}x{state.cols}, {state.mine_count} mines"
@@ -891,8 +890,8 @@ def tier_of(state: game.GameState | None) -> int:
     """
     if state is None or not config.TIERS:
         return 0
-    # The big board pays like the top rung: it is longer and harder than any
-    # of them, and nobody should earn less for turning up to it.
+    # The big board ranks with the top rung, being longer than any of them;
+    # what it pays is set separately, in tier_multiplier.
     if is_massive(state):
         return len(config.TIERS) - 1
     for index, (rows, cols, _) in enumerate(config.TIERS):
@@ -940,7 +939,14 @@ def tier_multiplier(state: game.GameState | None) -> int:
     rather than handing out more cells per turn matters: the extra reward is
     spread over MORE turns, because harder boards run longer, instead of
     being concentrated into fewer.
+
+    The big board pays 1x. It is less dense than the 11x11 (13-16% against
+    20%), so each cell is safer, not riskier, and the volume is already the
+    reward: at 3x a 22x22 would hand out about 1,200 points in a day, ten
+    regular boards' worth, and swamp the weekly table and the milestones.
     """
+    if is_massive(state):
+        return 1
     return tier_of(state) + 1
 
 

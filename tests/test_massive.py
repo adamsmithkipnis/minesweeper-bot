@@ -131,10 +131,23 @@ class WhatItIs(_Config):
         config.MASSIVE_BOARDS = [(11, 11, 24)]
         self.assertFalse(main.is_massive(self.board(11, 11, 24)))
 
-    def test_it_pays_like_the_top_tier(self):
+    def test_it_ranks_with_the_top_tier(self):
         big = self.board(14, 14, 31)
         self.assertEqual(main.tier_of(big), 2)
-        self.assertEqual(main.tier_multiplier(big), 3)
+
+    def test_it_pays_one_point_a_cell(self):
+        """At 3x a 22x22 is ten regular boards' worth of points in a day,
+        which would swamp the weekly table every Monday."""
+        for rows, cols, mines in config.MASSIVE_BOARDS:
+            self.assertEqual(main.tier_multiplier(
+                self.board(rows, cols, mines)), 1, f"{rows}x{cols}")
+        self.assertEqual(main.tier_multiplier(self.board(11, 11, 24)), 3)
+
+    def test_the_opening_post_promises_no_multiplier(self):
+        text = main.build_opening_text(self.board(22, 22, 77),
+                                       {"played": 0, "cleared": 0,
+                                        "exploded": 0})
+        self.assertNotIn("x points", text)
 
     def test_the_ladder_resumes_where_it_was(self):
         db.set_setting("massive_resume_tier", "1")
