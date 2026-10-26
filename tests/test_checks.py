@@ -234,6 +234,27 @@ class LiveTurn(unittest.TestCase):
     def test_knockout_mode(self):
         self.check_turn(knockout=True)
 
+    def test_a_knocked_out_player_can_still_check(self):
+        """The bench stops moves, not notes: like a flag, a check costs no
+        turn and risks nothing, so sitting out is no reason to refuse it."""
+        db.eliminate(1, "did:p0", "p0.bsky.social", "A1",
+                     self.state.turn_number)
+        target, move = self.hidden[-1], self.hidden[0]
+        self.play([f"check {target}, then {move}"], knockout=True)
+        self.assertIn(target, db.checked_coords(1))
+        self.assertEqual([m for m in db.get_moves(1) if m["did"] == "did:p0"],
+                         [], "the benched player's move was played")
+
+    def test_the_knocked_out_reply_says_so(self):
+        state = game.new_game(1)
+        state.turn_number = 9999
+        mine = main.Play("did:n", "newcomer.bsky.social", "J10", game.MINE,
+                         reply_uri="at://n/x", reply_cid="c")
+        text = main.build_knockout_credit_reply(state, mine, 9999, 999999,
+                                                first_move=True)
+        self.assertIn("You can still flag & check cells while you wait.", text)
+        self.assertLessEqual(len(text), 300)
+
     def test_the_explanation_is_sent_once_per_player(self):
         target = self.hidden[-1]
         self.play([f"check {target}"], knockout=True)
