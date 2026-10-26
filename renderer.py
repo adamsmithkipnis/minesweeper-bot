@@ -21,6 +21,7 @@ original frame has the room for them.
 from __future__ import annotations
 
 import io
+from datetime import date, datetime
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -196,39 +197,175 @@ def _counter(draw, box, value):
                "-" if char == "-" else int(char))
 
 
-def _smiley(draw, box, mood):
-    """Neutral while playing, sunglasses on a clear, dead on a mine."""
+# ---------------------------------------------------------------------------
+# Holidays: the smiley dresses up for a few days a year
+# ---------------------------------------------------------------------------
+
+HALLOWEEN = "halloween"
+CHRISTMAS = "christmas"
+EASTER = "easter"
+
+
+def easter_sunday(year: int) -> date:
+    """Western (Gregorian) Easter, by the anonymous Meeus/Jones/Butcher rule."""
+    a = year % 19
+    b, c = divmod(year, 100)
+    d, e = divmod(b, 4)
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = divmod(c, 4)
+    el = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * el) // 451
+    month, day = divmod(h + el - 7 * m + 114, 31)
+    return date(year, month, day + 1)
+
+
+def holiday(day: date | None = None) -> str | None:
+    """Which costume the smiley wears on `day`, in the bot's local time.
+
+    The week up to and including Halloween, the week up to and including
+    Christmas, and Easter Sunday itself. Every other day it is just a smiley.
+    """
+    day = day or datetime.now().astimezone().date()
+    if date(day.year, 10, 25) <= day <= date(day.year, 10, 31):
+        return HALLOWEEN
+    if date(day.year, 12, 18) <= day <= date(day.year, 12, 25):
+        return CHRISTMAS
+    if day == easter_sunday(day.year):
+        return EASTER
+    return None
+
+
+PUMPKIN = "#FF8C1A"
+PUMPKIN_RIB = "#D96A00"
+STEM = "#3C7A1E"
+SANTA_RED = "#D01010"
+FUR = "#FFFFFF"
+BUNNY = "#EEEEEE"
+BUNNY_PINK = "#FF9EC4"
+
+
+def _smiley(draw, box, mood, theme=None):
+    """Neutral while playing, sunglasses on a clear, dead on a mine.
+
+    `theme` is a holiday from `holiday()`. It changes the costume, never the
+    mood: a jack-o-lantern still puts sunglasses on for a clear.
+    """
     x0, y0, x1, y1 = box
     draw.rectangle(box, fill=FACE)
     _bevel(draw, box, PANEL_BEVEL, raised=True)
     inset = PANEL_BEVEL + 4
     face = (x0 + inset, y0 + inset, x1 - inset, y1 - inset)
-    draw.ellipse(face, fill="#FFFF00", outline=TEXT, width=2)
 
+    # A hat or a pair of ears needs headroom, so those faces sit lower and
+    # smaller in the button.
+    if theme in (CHRISTMAS, EASTER):
+        shrink = (face[2] - face[0]) * (0.22 if theme == CHRISTMAS else 0.16)
+        face = (face[0] + shrink / 2, face[1] + shrink, face[2] - shrink / 2,
+                face[3])
     fx0, fy0, fx1, fy1 = face
     w, h = fx1 - fx0, fy1 - fy0
+
+    if theme == EASTER:
+        # Ears first, so the head overlaps their bases.
+        for cx, lean in ((fx0 + w * 0.30, -0.06), (fx0 + w * 0.70, 0.06)):
+            top = y0 + PANEL_BEVEL + 1
+            draw.ellipse((cx - w * 0.15 + w * lean, top,
+                          cx + w * 0.15 + w * lean, fy0 + h * 0.35),
+                         fill=BUNNY, outline=TEXT, width=2)
+            draw.ellipse((cx - w * 0.06 + w * lean, top + h * 0.12,
+                          cx + w * 0.06 + w * lean, fy0 + h * 0.18),
+                         fill=BUNNY_PINK)
+    if theme == HALLOWEEN:
+        draw.rectangle((fx0 + w * 0.44, fy0 - h * 0.10,
+                        fx0 + w * 0.58, fy0 + h * 0.10), fill=STEM)
+
+    fill = {HALLOWEEN: PUMPKIN, EASTER: BUNNY}.get(theme, "#FFFF00")
+    draw.ellipse(face, fill=fill, outline=TEXT, width=2)
+    if theme == HALLOWEEN:
+        for inner in (0.30, 0.70):
+            draw.arc((fx0 + w * inner - w * 0.14, fy0 + 2,
+                      fx0 + w * inner + w * 0.14, fy1 - 2),
+                     start=90 if inner < 0.5 else 270,
+                     end=270 if inner < 0.5 else 90, fill=PUMPKIN_RIB, width=1)
+
     eye_y = fy0 + h * 0.34
     left_x, right_x = fx0 + w * 0.31, fx0 + w * 0.69
     r = max(2, w * 0.065)
 
+    # Eyes.
     if mood == "dead":
         for cx in (left_x, right_x):
             s = r * 1.5
             draw.line((cx - s, eye_y - s, cx + s, eye_y + s), fill=TEXT, width=3)
             draw.line((cx + s, eye_y - s, cx - s, eye_y + s), fill=TEXT, width=3)
+    elif mood == "cool":
+        draw.rectangle((fx0 + w * 0.14, eye_y - r * 1.4,
+                        fx1 - w * 0.14, eye_y + r * 1.1), fill=TEXT)
+    elif theme == HALLOWEEN:
+        for cx in (left_x, right_x):
+            s = r * 1.6
+            draw.polygon([(cx, eye_y - s), (cx + s, eye_y + s * 0.8),
+                          (cx - s, eye_y + s * 0.8)], fill=TEXT)
+    else:
+        for cx in (left_x, right_x):
+            draw.ellipse((cx - r, eye_y - r * 1.3, cx + r, eye_y + r * 1.3),
+                         fill=TEXT)
+
+    # Nose and whiskers, for the rabbit.
+    if theme == EASTER:
+        ny = fy0 + h * 0.55
+        draw.polygon([(fx0 + w * 0.43, ny - h * 0.05), (fx0 + w * 0.57, ny - h * 0.05),
+                      (fx0 + w * 0.50, ny + h * 0.04)], fill=BUNNY_PINK, outline=TEXT)
+        for side in (-1, 1):
+            for dy in (-0.04, 0.04):
+                draw.line((fx0 + w * (0.5 + side * 0.14), ny + h * dy,
+                           fx0 + w * (0.5 + side * 0.48), ny + h * dy * 2.5),
+                          fill=TEXT, width=1)
+
+    # Mouth.
+    if mood == "dead":
         draw.ellipse((fx0 + w * 0.38, fy0 + h * 0.58,
                       fx0 + w * 0.62, fy0 + h * 0.82), outline=TEXT, width=3)
+    elif theme == HALLOWEEN:
+        # The carved zig-zag grin.
+        top, bottom = fy0 + h * 0.58, fy0 + h * 0.80
+        xs = [fx0 + w * (0.22 + 0.56 * i / 6) for i in range(7)]
+        upper = [(x, top + (h * 0.07 if i % 2 else 0)) for i, x in enumerate(xs)]
+        draw.polygon(upper + [(xs[-1] - w * 0.06, bottom - h * 0.04),
+                              (fx0 + w * 0.5, bottom),
+                              (xs[0] + w * 0.06, bottom - h * 0.04)], fill=TEXT)
+    elif theme == EASTER:
+        ny = fy0 + h * 0.59
+        draw.line((fx0 + w * 0.5, ny, fx0 + w * 0.5, ny + h * 0.08), fill=TEXT, width=2)
+        draw.arc((fx0 + w * 0.32, ny - h * 0.06, fx0 + w * 0.50, ny + h * 0.12),
+                 start=20, end=160, fill=TEXT, width=2)
+        draw.arc((fx0 + w * 0.50, ny - h * 0.06, fx0 + w * 0.68, ny + h * 0.12),
+                 start=20, end=160, fill=TEXT, width=2)
+        draw.rectangle((fx0 + w * 0.43, ny + h * 0.12, fx0 + w * 0.57, ny + h * 0.24),
+                       fill=FUR, outline=TEXT)
+        draw.line((fx0 + w * 0.5, ny + h * 0.12, fx0 + w * 0.5, ny + h * 0.24),
+                  fill=TEXT, width=1)
     else:
-        if mood == "cool":
-            draw.rectangle((fx0 + w * 0.14, eye_y - r * 1.4,
-                            fx1 - w * 0.14, eye_y + r * 1.1), fill=TEXT)
-        else:
-            for cx in (left_x, right_x):
-                draw.ellipse((cx - r, eye_y - r * 1.3, cx + r, eye_y + r * 1.3),
-                             fill=TEXT)
         draw.arc((fx0 + w * 0.24, fy0 + h * 0.38,
                   fx1 - w * 0.24, fy0 + h * 0.86), start=20, end=160,
                  fill=TEXT, width=3)
+
+    # Santa's cap goes on last, over the top of the head, flopping right.
+    if theme == CHRISTMAS:
+        brim_y = fy0 + h * 0.07
+        top = y0 + PANEL_BEVEL + 2
+        draw.polygon([(fx0 + w * 0.08, brim_y), (fx1 - w * 0.08, brim_y),
+                      (fx1 - w * 0.02, top + h * 0.22), (fx0 + w * 0.55, top),
+                      (fx0 + w * 0.20, top + h * 0.08)],
+                     fill=SANTA_RED, outline=TEXT)
+        draw.rounded_rectangle((fx0 - w * 0.02, brim_y - h * 0.08,
+                                fx1 + w * 0.02, brim_y + h * 0.08),
+                               radius=h * 0.08, fill=FUR, outline=TEXT)
+        pom = w * 0.11
+        px, py = fx1 - w * 0.02, top + h * 0.22
+        draw.ellipse((px - pom, py - pom, px + pom, py + pom), fill=FUR, outline=TEXT)
 
 
 def _draw_flag(draw, box):
@@ -266,8 +403,11 @@ def _draw_mine(draw, box):
 # ---------------------------------------------------------------------------
 
 def render_board(state: game.GameState, highlight: str = "",
-                 flags=()) -> bytes:
-    """Render the board to PNG bytes. `highlight` rings a coordinate."""
+                 flags=(), day: date | None = None) -> bytes:
+    """Render the board to PNG bytes. `highlight` rings a coordinate.
+
+    `day` picks the smiley's holiday costume and defaults to today.
+    """
     grid = display_grid(state, flags)
     grid_w, grid_h = state.cols * CELL, state.rows * CELL
 
@@ -304,7 +444,8 @@ def render_board(state: game.GameState, highlight: str = "",
     mood = {game.CLEARED: "cool", game.EXPLODED: "dead"}.get(state.status, "happy")
     face_size = HEADER_H - inset * 2
     fx = (hx0 + hx1) / 2 - face_size / 2
-    _smiley(draw, (fx, hy0 + inset, fx + face_size, hy0 + inset + face_size), mood)
+    _smiley(draw, (fx, hy0 + inset, fx + face_size, hy0 + inset + face_size), mood,
+            holiday(day))
 
     # Labels, in the grey margin — the one thing the original does not have,
     # and the one thing a voter cannot play without.
