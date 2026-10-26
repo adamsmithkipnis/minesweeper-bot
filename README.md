@@ -127,6 +127,17 @@ so a wrong flag earns the credit as readily as a right one and nothing leaks.
 A board's flag score is floored at zero, and all time is the sum of the
 floored boards: recognition, never a losing record anybody has to shake.
 
+### Check marks
+
+`check D4`, or a tick next to the cell (`✅ D4`, `D4 ✔️`, `☑️ D4`), marks it
+for a second look: probably a mine, not sure enough to bet a flag on. It is
+a note to the other players and nothing more. It costs no turn and scores
+nothing, it is never read as a move, and a flag on the same cell is the one
+drawn. One shared mark per cell; anyone can clear it with `uncheck D4`, and
+it disappears when the cell opens. The board shows a green tick and the alt
+text a `C`. Each player gets one reply the first time, which also says how
+to open the cell, because before this `check D4` was read as a move to D4.
+
 ### Knockout play
 
 Off by default (`KNOCKOUT=1` to enable). Instead of the crowd voting on one

@@ -330,6 +330,22 @@ def build_gameover_text(state: game.GameState, coord: str, vote, source: str,
                       + "\n".join(kept + [required]))
 
 
+def build_check_reply(coords: list) -> str:
+    """Explain a check mark, once, to each player who first places one.
+
+    The phrase "check D4" used to read as a vote to open D4, so this is also
+    where somebody who meant that finds out how to open it instead.
+    """
+    which = coords[0] if len(coords) == 1 else ", ".join(coords[:3])
+    first = coords[0]
+    return _with_tags(
+        f"✅ Marked {which} to check — a note to everyone that it might be a "
+        f"mine. It shows as a green tick, costs no turn and scores nothing.\n"
+        f"Sure it's a mine? 'flag {first}' bets on it. Meant to open it? "
+        f"Reply just {first}. 'uncheck {first}' clears the mark.",
+        tags=[config.REPLY_HASHTAG])
+
+
 def build_flag_reply(coords: list, total_flagged: int) -> str:
     """Confirm a flag publicly.
 
@@ -1070,9 +1086,10 @@ def _remember(uri: str, kind: str, game_id: int, turn: int | None = None) -> Non
 
 
 def _post_board(state: game.GameState, text: str, kind: str,
-                extra_dids: dict | None = None, flags=()) -> str:
-    image = renderer.render_board(state, highlight=state.last_coord, flags=flags)
-    alt = renderer.build_alt_text(state, flags)
+                extra_dids: dict | None = None, flags=(), checks=()) -> str:
+    image = renderer.render_board(state, highlight=state.last_coord,
+                                  flags=flags, checks=checks)
+    alt = renderer.build_alt_text(state, flags, checks)
     uri = bluesky.post_with_image(text, image, alt=alt, kind=kind,
                                   extra_dids=extra_dids)
     _remember(uri, kind, state.game_id, state.turn_number)
@@ -1603,6 +1620,83 @@ def _announce_milestones(state: game.GameState, movers: list) -> None:
                 logger.exception("Failed to release a milestone claim")
 
 
+def _record_checks(state: game.GameState, replies: list,
+                   already_open: set) -> dict:
+    """Place and clear this turn's check marks; {coord: [Reply]} asked to mark.
+
+    Recorded before the post, like flags, and idempotent the same way: a
+    replayed turn reads the same replies and leaves the same marks. Never
+    allowed to break a turn.
+    """
+    try:
+        checks, unchecks = votes.collect_check_changes(
+            replies, already_open, state.rows, state.cols)
+        for coord in unchecks:
+            db.remove_check(state.game_id, coord)
+        for coord, repliers in checks.items():
+            first = repliers[0]
+            db.add_check(state.game_id, coord, first.did, first.handle,
+                         state.turn_number)
+        if checks or unchecks:
+            logger.info("Checks: %d marked, %d cleared", len(checks),
+                        len(unchecks))
+        return checks
+    except Exception:
+        logger.exception("Failed to record check marks")
+        return {}
+
+
+def _visible_checks(state: game.GameState, flags=()) -> set:
+    """Marks still worth drawing: on hidden cells, and under no flag."""
+    try:
+        return {c for c in db.checked_coords(state.game_id)
+                if c not in flags and not state.coord_is_revealed(c)}
+    except Exception:
+        logger.exception("Failed to read check marks")
+        return set()
+
+
+def _confirm_first_checks(state: game.GameState, checked: dict) -> None:
+    """Explain check marks once, to each player the first time they use one."""
+    by_player = {}
+    for coord, repliers in checked.items():
+        for reply in repliers:
+            if not reply.did or not reply.uri:
+                continue
+            entry = by_player.setdefault(reply.did,
+                                         {"reply": reply, "coords": set()})
+            entry["coords"].add(coord)
+            if (reply.created_at or "") < (entry["reply"].created_at or ""):
+                entry["reply"] = reply
+
+    for did, entry in sorted(by_player.items(),
+                             key=lambda item: item[1]["reply"].created_at or ""):
+        reply = entry["reply"]
+        try:
+            if not db.claim_check_tutorial(did):
+                continue
+        except Exception:
+            logger.exception("Failed to reserve check tutorial for %s",
+                             reply.handle)
+            continue
+        try:
+            uri = bluesky.post_reply(
+                build_check_reply(sorted(entry["coords"])),
+                parent_uri=reply.uri, parent_cid=reply.cid,
+                root_uri=reply.root_uri, root_cid=reply.root_cid,
+                kind="checkack")
+        except Exception:
+            logger.exception("Failed to explain a check mark to %s",
+                             reply.handle)
+            try:
+                db.release_check_tutorial(did)
+            except Exception:
+                logger.exception("Failed to release check tutorial for %s",
+                                 reply.handle)
+            continue
+        _remember(uri, "checkack", state.game_id, state.turn_number)
+
+
 def _confirm_first_flags(state: game.GameState, claimed: dict) -> None:
     """Teach each player once, when they place their first-ever flag."""
     by_player = {}
@@ -1793,10 +1887,11 @@ def _game_tick() -> None:
         replies, already_open, state.rows, state.cols,
         db.flagged_coords(state.game_id, config.FLAG_QUORUM))
     claimed, capped = _record_flags(state, claimed, withdrawn)
+    checked = _record_checks(state, replies, already_open)
 
     if config.KNOCKOUT:
         _play_knockout_turn(state, replies, already_open, position, analysis,
-                            claimed, withdrawn, ignored, capped)
+                            claimed, withdrawn, ignored, capped, checked)
         return
 
     # 2. Decide. The quorum exists to stop one stray vote carrying a turn when
@@ -1891,7 +1986,8 @@ def _game_tick() -> None:
         kind = "turn"
 
     try:
-        uri = _post_board(state, text, kind, extra_dids=extra, flags=flags)
+        uri = _post_board(state, text, kind, extra_dids=extra, flags=flags,
+                          checks=_visible_checks(state, flags))
     except Exception:
         logger.exception("Posting failed; turn not saved and will be replayed")
         return
@@ -1935,6 +2031,8 @@ def _game_tick() -> None:
 
     if claimed:
         _confirm_first_flags(state, claimed)
+    if checked:
+        _confirm_first_checks(state, checked)
     if withdrawn:
         _confirm_unflags(state, withdrawn)
     if ignored:
@@ -1974,7 +2072,8 @@ def _play_knockout_turn(state: game.GameState, replies: list,
                         already_open: set, position, analysis,
                         claimed: dict, withdrawn: dict,
                         ignored: dict | None = None,
-                        capped: dict | None = None) -> None:
+                        capped: dict | None = None,
+                        checked: dict | None = None) -> None:
     """One knockout turn: everybody eligible opens a cell of their own.
 
     Same ordering discipline as the plurality path — the move is applied in
@@ -2029,7 +2128,8 @@ def _play_knockout_turn(state: game.GameState, replies: list,
         kind = "turn"
 
     try:
-        uri = _post_board(state, text, kind, extra_dids=extra, flags=flags)
+        uri = _post_board(state, text, kind, extra_dids=extra, flags=flags,
+                          checks=_visible_checks(state, flags))
     except Exception:
         logger.exception("Posting failed; turn not saved and will be replayed")
         return
@@ -2066,6 +2166,8 @@ def _play_knockout_turn(state: game.GameState, replies: list,
         _resolve_flags(state, last.coord, last.result, revealed_before)
     if claimed:
         _confirm_first_flags(state, claimed)
+    if checked:
+        _confirm_first_checks(state, checked)
     if withdrawn:
         _confirm_unflags(state, withdrawn)
     if ignored:

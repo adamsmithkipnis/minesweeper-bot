@@ -126,6 +126,26 @@ CREATE TABLE IF NOT EXISTS flag_tutorials (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Cells somebody has marked to check: probably a mine, not sure enough to
+-- bet a flag on. One shared mark per cell that anyone may place or clear;
+-- `did` is whoever placed it. Scores nothing, so nothing here is a claim.
+CREATE TABLE IF NOT EXISTS checks (
+    id INTEGER PRIMARY KEY,
+    game_id INTEGER,
+    coord TEXT,
+    did TEXT,
+    handle TEXT,
+    turn_number INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (game_id, coord)
+);
+
+-- Players who have had the one-time reply explaining check marks.
+CREATE TABLE IF NOT EXISTS check_tutorials (
+    did TEXT PRIMARY KEY,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Knocked-out players, per board. A mine takes the player who opened it out
 -- of that board rather than ending it for everyone; they can still flag.
 CREATE TABLE IF NOT EXISTS eliminations (
@@ -788,6 +808,51 @@ def get_history(limit: int = 20) -> list:
 # Flags
 # ---------------------------------------------------------------------------
 
+def add_check(game_id: int, coord: str, did: str, handle: str,
+              turn_number: int) -> bool:
+    """Mark a cell to check; True if it was not already marked."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO checks (game_id, coord, did, handle, "
+            "turn_number) VALUES (?, ?, ?, ?, ?)",
+            (game_id, coord, did, handle, turn_number))
+        return cur.rowcount == 1
+
+
+def remove_check(game_id: int, coord: str) -> bool:
+    """Clear a cell's check mark; True if there was one."""
+    with _connect() as conn:
+        cur = conn.execute("DELETE FROM checks WHERE game_id = ? AND coord = ?",
+                           (game_id, coord))
+        return cur.rowcount > 0
+
+
+def checked_coords(game_id: int) -> set:
+    """Every cell marked to check on this board, opened or not."""
+    with _connect() as conn:
+        rows = conn.execute("SELECT coord FROM checks WHERE game_id = ?",
+                            (game_id,)).fetchall()
+    return {r["coord"] for r in rows}
+
+
+def claim_check_tutorial(did: str) -> bool:
+    """Reserve a player's one-time check-mark explanation."""
+    if not did:
+        return False
+    with _connect() as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO check_tutorials (did) VALUES (?)", (did,))
+        return cur.rowcount == 1
+
+
+def release_check_tutorial(did: str) -> None:
+    """Let a failed explanation be tried again on the player's next check."""
+    if not did:
+        return
+    with _connect() as conn:
+        conn.execute("DELETE FROM check_tutorials WHERE did = ?", (did,))
+
+
 def claim_flag_tutorial(did: str) -> bool:
     """Reserve a player's lifetime one-time flag tutorial."""
     if not did:
@@ -1191,6 +1256,8 @@ def reset_all(keep_record: bool = False) -> None:
             conn.execute("DELETE FROM flags")
             conn.execute("DELETE FROM assists")
             conn.execute("DELETE FROM flag_tutorials")
+            conn.execute("DELETE FROM checks")
+            conn.execute("DELETE FROM check_tutorials")
             conn.execute("DELETE FROM notices")
             conn.execute("DELETE FROM eliminations")
             # Points go with the moves, so the milestones they earned have to
