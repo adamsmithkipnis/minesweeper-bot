@@ -134,7 +134,7 @@ for a second look: probably a mine, not sure enough to bet a flag on. It is
 a note to the other players and nothing more. It costs no turn and scores
 nothing, it is never read as a move, and a flag on the same cell is the one
 drawn. One shared mark per cell; anyone can clear it with `uncheck D4`, and
-it disappears when the cell opens. The board shows a green tick and the alt
+it disappears when the cell opens. The board shows a ✔️ and the alt
 text a `C`. Each player gets one reply the first time, which also says how
 to open the cell, because before this `check D4` was read as a move to D4.
 
