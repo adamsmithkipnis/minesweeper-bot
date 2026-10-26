@@ -7,6 +7,7 @@ this project exists rather than a third Battleship account.
 
 import random
 import unittest
+from datetime import date
 
 from helpers import game, solver
 
@@ -128,6 +129,44 @@ class Image(unittest.TestCase):
         state = game.new_game(1, rng=random.Random(7))
         self.assertTrue(renderer.render_board(state, highlight="Z99"))
         self.assertTrue(renderer.render_board(state, highlight=""))
+
+
+@unittest.skipUnless(HAS_PILLOW, "Pillow not installed (use .venv/bin/python)")
+class Holidays(unittest.TestCase):
+    def test_easter_lands_on_the_published_sundays(self):
+        for day in (date(2024, 3, 31), date(2025, 4, 20), date(2026, 4, 5),
+                    date(2027, 3, 28), date(2038, 4, 25)):
+            self.assertEqual(renderer.easter_sunday(day.year), day)
+            self.assertEqual(day.weekday(), 6)
+
+    def test_each_costume_has_its_window_and_no_more(self):
+        cases = {
+            date(2026, 10, 24): None,
+            date(2026, 10, 25): renderer.HALLOWEEN,
+            date(2026, 10, 31): renderer.HALLOWEEN,
+            date(2026, 11, 1): None,
+            date(2026, 12, 17): None,
+            date(2026, 12, 18): renderer.CHRISTMAS,
+            date(2026, 12, 25): renderer.CHRISTMAS,
+            date(2026, 12, 26): None,
+            date(2027, 3, 27): None,
+            date(2027, 3, 28): renderer.EASTER,
+            date(2027, 3, 29): None,
+            date(2027, 7, 4): None,
+        }
+        for day, expected in cases.items():
+            self.assertEqual(renderer.holiday(day), expected, day)
+
+    def test_every_costume_renders_in_every_mood(self):
+        state = game.new_game(1, rng=random.Random(7))
+        plain = renderer.render_board(state, day=date(2026, 7, 4))
+        for day in (date(2026, 10, 31), date(2026, 12, 25), date(2026, 4, 5)):
+            dressed = renderer.render_board(state, day=day)
+            self.assertNotEqual(dressed, plain, day)
+            for status in (game.CLEARED, game.EXPLODED):
+                state.status = status
+                self.assertTrue(renderer.render_board(state, day=day))
+            state.status = game.ACTIVE
 
 
 if __name__ == "__main__":
