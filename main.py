@@ -1025,6 +1025,9 @@ def massive_board_for(when: datetime) -> tuple | None:
     local = when.astimezone(_leaderboard_tz())
     if _DAYS[local.weekday()] != config.MASSIVE_DAY:
         return None
+    # ISO dates compare correctly as text.
+    if config.MASSIVE_START and local.date().isoformat() < config.MASSIVE_START:
+        return None
     if db.get_setting(_MASSIVE_DATE) == local.date().isoformat():
         return None
     week = min((local.day - 1) // 7, len(config.MASSIVE_BOARDS) - 1)
