@@ -69,6 +69,21 @@ _NEGATION_BEFORE = re.compile(
     re.IGNORECASE,
 )
 
+# "check D4" or "✅ D4" marks a cell as worth a second look: probably a mine,
+# but not sure enough to bet a flag on. It is a note to the other players,
+# never a request to open the cell, and it scores nothing.
+_CHECKS = "\u2705\u2714\u2611\u2713"          # ✅ ✔ ☑ ✓ (with or without FE0F)
+_CHECK_BEFORE = re.compile(
+    rf"(?:\bcheck(?:ing|ed)?\b|[{_CHECKS}])[^A-Za-z0-9]{{0,6}}$", re.IGNORECASE)
+_CHECK_AFTER = re.compile(rf"^[^A-Za-z0-9]{{0,4}}[{_CHECKS}]")
+
+# Taking a check mark off. Tested before _CHECK_BEFORE, which would
+# otherwise read the "check" inside "un-check D4" as placing one.
+_UNCHECK_BEFORE = re.compile(
+    r"\b(?:un-?check(?:ing|ed)?|remove(?:\s+the)?\s+check(?:\s+(?:on|from|at))?"
+    r"|clear(?:\s+the)?\s+check(?:\s+(?:on|from|at))?)\b[^A-Za-z0-9]{0,4}$",
+    re.IGNORECASE)
+
 _LOOKBACK = 24      # characters of context examined on either side
 
 # "flag C3 and D5" flags both. A flag carries to the next coordinate only
@@ -86,6 +101,8 @@ class Mention:
     is_warning: bool = False    # being warned about rather than chosen
     is_flag: bool = False       # a positive claim that it holds a mine
     is_unflag: bool = False     # a request to take a mark off
+    is_check: bool = False      # marked to check: maybe a mine, not a bet
+    is_uncheck: bool = False    # a request to take a check mark off
 
 
 @dataclass(frozen=True)
@@ -138,11 +155,21 @@ def find_mentions(text: str, rows: int, cols: int) -> list:
             out.append(Mention(coord, is_unflag=True))
             spans.append((match.start(), match.end()))
             continue
+        if _UNCHECK_BEFORE.search(before):
+            out.append(Mention(coord, is_uncheck=True))
+            spans.append((match.start(), match.end()))
+            continue
 
         claims_mine = (bool(_IS_MINE.match(after))
                        or bool(_FLAG_BEFORE.search(before))
                        or bool(_DANGER_BEFORE.search(before))
                        or bool(_DANGER_AFTER.match(after)))
+        # A flag is the stronger claim, so it wins when a reply makes both.
+        if not claims_mine and (_CHECK_BEFORE.search(before)
+                                or _CHECK_AFTER.match(after)):
+            out.append(Mention(coord, is_warning=True, is_check=True))
+            spans.append((match.start(), match.end()))
+            continue
         warning = claims_mine or bool(_NEGATION_BEFORE.search(before))
         choice = bool(vote_word.search(before)) and not warning
         out.append(Mention(coord, is_choice=choice, is_warning=warning,
@@ -158,7 +185,8 @@ def find_mentions(text: str, rows: int, cols: int) -> list:
     for _ in range(len(out)):          # settle chains like "C3, D4 and E5"
         changed = False
         for i in range(len(out)):
-            if out[i].is_flag or out[i].is_unflag:
+            if (out[i].is_flag or out[i].is_unflag or out[i].is_check
+                    or out[i].is_uncheck):
                 continue
             # An unflag carries forwards only: "unflag E1 E5" clears both.
             # Left out, E5 was a plain mention and, being last, became the
@@ -167,12 +195,25 @@ def find_mentions(text: str, rows: int, cols: int) -> list:
                 out[i] = Mention(out[i].coord, is_unflag=True)
                 changed = True
                 continue
+            if i > 0 and out[i - 1].is_uncheck and _joined(i - 1, i):
+                out[i] = Mention(out[i].coord, is_uncheck=True)
+                changed = True
+                continue
             neighbours = [j for j in (i - 1, i + 1) if 0 <= j < len(out)]
             for j in neighbours:
                 if out[j].is_flag and _joined(min(i, j), max(i, j)):
                     out[i] = Mention(out[i].coord, is_warning=True, is_flag=True)
                     changed = True
                     break
+            else:
+                # A check carries both ways, like a flag: "check D4 and D5",
+                # "D4, D5 ✅".
+                for j in neighbours:
+                    if out[j].is_check and _joined(min(i, j), max(i, j)):
+                        out[i] = Mention(out[i].coord, is_warning=True,
+                                         is_check=True)
+                        changed = True
+                        break
         if not changed:
             break
     return out
@@ -207,7 +248,8 @@ def parse_vote(text: str, rows: int, cols: int) -> str | None:
     "who wants to fall on the H1/H2 sword" opened H2.
     """
     candidates = [m for m in find_mentions(text, rows, cols)
-                  if not m.is_warning and not m.is_unflag]
+                  if not m.is_warning and not m.is_unflag
+                  and not m.is_uncheck]
     if not candidates:
         undone = {m.coord for m in find_mentions(text, rows, cols)
                   if m.is_unflag}
@@ -246,6 +288,48 @@ def parse_flags(text: str, rows: int, cols: int) -> tuple:
         elif mention.is_flag:
             flagged.add(mention.coord)
     return flagged, unflagged
+
+
+def parse_checks(text: str, rows: int, cols: int) -> tuple:
+    """(checked, unchecked) coordinate sets from one reply."""
+    checked, unchecked = set(), set()
+    for mention in find_mentions(text, rows, cols):
+        if mention.is_uncheck:
+            unchecked.add(mention.coord)
+        elif mention.is_check:
+            checked.add(mention.coord)
+    return checked, unchecked
+
+
+def collect_check_changes(replies: list, resolved: set, rows: int,
+                          cols: int) -> tuple:
+    """(checks, unchecks), each {coord: [Reply, ...]}, across replies.
+
+    A check mark is one shared note per cell that anyone may place or take
+    off, and it carries no points, so there is nothing to protect with the
+    flags' first-change-per-turn rule: the latest word on a cell, from
+    anybody, decides it. Cells already open are ignored. Each cell lists
+    only the people who asked for the state it ends in.
+    """
+    ordered = sorted(replies, key=lambda r: r.created_at or "")
+    parsed = []
+    final = {}
+    for reply in ordered:
+        checked, unchecked = parse_checks(reply.text, rows, cols)
+        checked, unchecked = checked - resolved, unchecked - resolved - checked
+        parsed.append((reply, checked, unchecked))
+        final.update({coord: True for coord in checked})
+        final.update({coord: False for coord in unchecked})
+
+    checks, unchecks = {}, {}
+    for reply, checked, unchecked in parsed:
+        for coord in checked:
+            if final[coord]:
+                checks.setdefault(coord, []).append(reply)
+        for coord in unchecked:
+            if not final[coord]:
+                unchecks.setdefault(coord, []).append(reply)
+    return checks, unchecks
 
 
 def collect_flags(replies: list, resolved: set, rows: int, cols: int,
@@ -376,7 +460,10 @@ def is_actionable(text: str, rows: int, cols: int) -> bool:
     if parse_vote(text, rows, cols) is not None:
         return True
     flagged, unflagged = parse_flags(text, rows, cols)
-    return bool(flagged or unflagged)
+    if flagged or unflagged:
+        return True
+    checked, unchecked = parse_checks(text, rows, cols)
+    return bool(checked or unchecked)
 
 
 @dataclass

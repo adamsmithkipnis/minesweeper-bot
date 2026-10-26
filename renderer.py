@@ -33,6 +33,7 @@ HIDDEN = "?"
 MINE = "*"
 EXPLODED = "X"
 FLAG = "F"
+CHECK = "C"
 
 # The classic palette. Everything is made of one silver, and the illusion of
 # depth is entirely bevels: white on the top-left, mid-grey on the bottom
@@ -86,7 +87,7 @@ def _font(size: int):
     return ImageFont.load_default()
 
 
-def display_grid(state: game.GameState, flags=()) -> list:
+def display_grid(state: game.GameState, flags=(), checks=()) -> list:
     """The board as tokens, from the point of view of somebody reading the post.
 
     Hidden cells are '?' while the game is live — including the mines. The
@@ -115,6 +116,10 @@ def display_grid(state: game.GameState, flags=()) -> list:
                 # A flag is what the crowd claims, never what the board knows.
                 # Right and wrong flags look identical until the cell opens.
                 row.append(FLAG)
+            elif game.index_to_coord(r, c) in checks:
+                # A note between players, below a flag: a cell can be both,
+                # and the bet is the stronger thing to show.
+                row.append(CHECK)
             else:
                 row.append(HIDDEN)
         grid.append(row)
@@ -540,6 +545,15 @@ def _draw_flag(draw, box):
                   (x0 + w * 0.26, y0 + h * 0.36)], fill="#FF0000")
 
 
+def _draw_check(draw, box):
+    """A green tick: somebody thinks this one is worth a second look."""
+    x0, y0, x1, y1 = box
+    w, h = x1 - x0, y1 - y0
+    draw.line([(x0 + w * 0.26, y0 + h * 0.52), (x0 + w * 0.43, y0 + h * 0.70),
+               (x0 + w * 0.75, y0 + h * 0.30)],
+              fill="#008000", width=max(3, int(w * 0.11)), joint="curve")
+
+
 def _draw_mine(draw, box):
     """Black body, eight spikes, one white glint — as it always was."""
     x0, y0, x1, y1 = box
@@ -562,12 +576,12 @@ def _draw_mine(draw, box):
 # ---------------------------------------------------------------------------
 
 def render_board(state: game.GameState, highlight: str = "",
-                 flags=(), day: date | None = None) -> bytes:
+                 flags=(), day: date | None = None, checks=()) -> bytes:
     """Render the board to PNG bytes. `highlight` rings a coordinate.
 
     `day` picks the smiley's holiday costume and defaults to today.
     """
-    grid = display_grid(state, flags)
+    grid = display_grid(state, flags, checks)
     grid_w, grid_h = state.cols * CELL, state.rows * CELL
 
     grid_x = OUTER_BEVEL + PAD + LABEL_LEFT + PANEL_BEVEL
@@ -637,11 +651,13 @@ def render_board(state: game.GameState, highlight: str = "",
             box = (x0, y0, x0 + CELL, y0 + CELL)
             token = grid[r][c]
 
-            if token in (HIDDEN, FLAG):
+            if token in (HIDDEN, FLAG, CHECK):
                 draw.rectangle(box, fill=FACE)
                 _bevel(draw, box, TILE_BEVEL, raised=True)
                 if token == FLAG:
                     _draw_flag(draw, box)
+                elif token == CHECK:
+                    _draw_check(draw, box)
                 continue
 
             # Opened cells are flat, separated by a single grey rule — the
@@ -676,7 +692,7 @@ def render_board(state: game.GameState, highlight: str = "",
 ALT_LIMIT = 1800     # Bluesky allows more; this leaves headroom.
 
 
-def build_alt_text(state: game.GameState, flags=()) -> str:
+def build_alt_text(state: game.GameState, flags=(), checks=()) -> str:
     """Describe the board completely enough to play from.
 
     A 9x9 position fits in a few hundred characters, so unlike the Battleship
@@ -684,9 +700,14 @@ def build_alt_text(state: game.GameState, flags=()) -> str:
     screen-reader user can reconstruct the grid exactly and vote on the same
     footing as everyone else.
     """
-    grid = display_grid(state, flags)
+    grid = display_grid(state, flags, checks)
     letters = game.row_letters(state.rows)
     opened, total = len(state.revealed), state.total_safe
+    # Counted from the grid, so a mark on an opened or flagged cell, which
+    # does not show, is not counted either.
+    marked = sum(row.count(CHECK) for row in grid)
+    notes = ([f"{len(flags)} flagged"] if flags else []) + (
+        [f"{marked} marked to check"] if marked else [])
 
     when = (f"turn {state.turn_number}" if state.turn_number
             else "a new board")
@@ -695,12 +716,14 @@ def build_alt_text(state: game.GameState, flags=()) -> str:
             f"columns 1 to {state.cols}. "
             f"{state.mine_count} mines. "
             f"{opened} of {total} safe cells opened"
-            + (f", {len(flags)} flagged." if flags else "."))
+            + "".join(f", {note}" for note in notes) + ".")
 
     legend = ("Reading each row left to right: a digit is how many mines touch "
               "that cell, 0 is an opened blank, ? is still hidden")
     if flags:
         legend += ", F is a cell somebody has flagged as a mine"
+    if marked:
+        legend += ", C is a cell somebody has marked to check (maybe a mine)"
     if state.status != game.ACTIVE:
         legend += ", * is a mine, X is the mine that was hit"
     legend += "."
