@@ -295,3 +295,50 @@
 #accessiblegames 2
 #alttext 2
 #pixelgames
+
+# ---- added Oct 2026 ----
+# Unmeasured, so weight 1 or 2 like the rest of the tail; reweight once the
+# players' own tags say which of these found anyone. Each one is a true
+# description: the boards are logic and maths puzzles, the solver is a
+# constraint solver over a problem that is NP-complete, the game shipped with
+# Windows 3.1 and XP, the board is drawn with Pillow, and it lives on Bluesky.
+#minesweeperonline
+#logicpuzzlegame
+#brainpuzzle
+#puzzletime
+#puzzlefun
+#thinkinggames
+#reasoning
+#mathpuzzle 2
+#mathpuzzles
+#mathgames 2
+#recreationalmath 2
+#recreationalmathematics
+#constraintsatisfaction
+#npcomplete
+#windows31 2
+#windowsxp
+#90sgaming 2
+#90snostalgia 2
+#vintagecomputing 2
+#retropc
+#crowdgame
+#socialgame
+#teamwork
+#blueskygames 2
+#bskybot 2
+#bskybots
+#blueskybot
+#atprotodev
+#pillow
+#pythonprojects 2
+#botdev
+#botdevelopment
+#casualgaming 2
+#puzzlegamer
+#puzzlegamers
+#throwbackthursday 3 thu
+#tbt 2 thu
+#flashbackfriday 2 fri
+#saturdaypuzzle 2 sat
+#sundaypuzzle 2 sun

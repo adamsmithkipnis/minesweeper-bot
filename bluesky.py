@@ -30,6 +30,12 @@ _dry_counter = 0
 # and the short form the post copy uses.
 _did_by_name = {}
 
+# The CID of every post this process made, by URI. A reply needs its
+# parent's CID as well as its URI, and the posting functions return only the
+# URI, which every caller already stores; this is how the bot can thread a
+# follow-up under a post it has just made.
+_cids = {}
+
 POST_LIMIT = 300        # Bluesky's per-post grapheme limit
 ALT_LIMIT = 2000
 
@@ -178,19 +184,33 @@ def post_with_image(text: str, image: bytes, alt: str = "", kind: str = "post",
     text = clamp(text)
     alt = clamp(alt or "Minesweeper board.", ALT_LIMIT)
     if _dry():
-        return _write_dry(text, kind, image, alt, extra_dids)
-    return _client.send_image(
+        return _remember_cid(_write_dry(text, kind, image, alt, extra_dids))
+    return _remember_cid(_client.send_image(
         text=text, image=image, image_alt=alt,
         facets=build_facets(text, extra_dids),
-    ).uri
+    ))
 
 
 def post_text(text: str, kind: str = "post", extra_dids: dict | None = None) -> str:
     text = clamp(text)
     if _dry():
-        return _write_dry(text, kind, extra_dids=extra_dids)
-    return _client.send_post(
-        text=text, facets=build_facets(text, extra_dids)).uri
+        return _remember_cid(_write_dry(text, kind, extra_dids=extra_dids))
+    return _remember_cid(_client.send_post(
+        text=text, facets=build_facets(text, extra_dids)))
+
+
+def _remember_cid(posted) -> str:
+    """Note a new post's CID and return its URI; a dry run's is a stand-in."""
+    if isinstance(posted, str):
+        _cids[posted] = "dry"
+        return posted
+    _cids[posted.uri] = getattr(posted, "cid", "") or ""
+    return posted.uri
+
+
+def cid_of(uri: str) -> str:
+    """The CID of a post this process made, or '' if it made no such post."""
+    return _cids.get(uri, "")
 
 
 def post_reply(text: str, parent_uri: str, parent_cid: str,

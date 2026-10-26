@@ -774,6 +774,90 @@ def build_leaderboard_text(all_time: list, weekly: list, week_start,
     return _with_tags("\n".join(lines)), dids
 
 
+def _mention_list(names: list, room: int) -> str:
+    """'@a @b @c +2 more', as many names as fit in `room` characters."""
+    for shown in range(len(names), 0, -1):
+        rest = len(names) - shown
+        text = " ".join(f"@{n}" for n in names[:shown])
+        if rest:
+            text += f" +{rest} more"
+        if len(text) <= room:
+            return text
+    return f"+{len(names)} more" if names else ""
+
+
+def build_arrivals_text(newcomers: list, returners: list) -> tuple:
+    """The reply under the standings that names the week's new faces.
+
+    The table names the same three people most weeks, and a table nobody
+    new can enter is not a reason to come back. This names everybody who
+    played for the first time and everybody who came back after a gap, which
+    is what moves the monthly count. ("", {}) when there is nobody to name.
+    """
+    if not newcomers and not returners:
+        return "", {}
+    display, dids = _names(list(newcomers) + list(returners))
+    new_names, back_names = display[:len(newcomers)], display[len(newcomers):]
+    outro = "Glad you're here. Reply a coordinate on the live board to play."
+    labels = [("🌱 New this week: ", new_names),
+              ("👋 Welcome back: ", back_names)]
+    labels = [(label, names) for label, names in labels if names]
+    # Split the room between the lines, then let the first line keep
+    # whatever the second did not need.
+    budget = bluesky.POST_LIMIT - len(outro) - 2 - len(config.REPLY_HASHTAG) - 1
+    budget -= sum(len(label) + 1 for label, _ in labels)
+    lines = []
+    for index, (label, names) in enumerate(labels):
+        share = budget // (len(labels) - index)
+        listed = _mention_list(names, share)
+        budget -= len(listed)
+        lines.append(label + listed)
+    return _with_tags("\n".join(lines) + f"\n\n{outro}",
+                      tags=[config.REPLY_HASHTAG]), dids
+
+
+def build_board_thanks(players: list) -> tuple:
+    """The reply under a cleared board that names everyone who played it.
+
+    The game-over post has room for one MVP; this is the rest of the crowd.
+    A mention notifies each of them, which is a reason to look and share.
+    """
+    if not players:
+        return "", {}
+    display, dids = _names(players)
+    head = (f"🙌 Swept by {_plural(len(players), 'player')}. "
+            f"Thank you, everyone:")
+    room = bluesky.POST_LIMIT - len(head) - 1 - len(config.REPLY_HASHTAG) - 1
+    return _with_tags(f"{head}\n{_mention_list(display, room)}",
+                      tags=[config.REPLY_HASHTAG]), dids
+
+
+def _reply_to_own_post(uri: str, text: str, kind: str, dids: dict,
+                       game_id: int | None) -> None:
+    """Thread a follow-up under a post this process just made. Best-effort."""
+    cid = bluesky.cid_of(uri)
+    if not text or not cid:
+        return
+    try:
+        reply = bluesky.post_reply(text, parent_uri=uri, parent_cid=cid,
+                                   kind=kind, extra_dids=dids)
+        _remember(reply, kind, game_id)
+    except Exception:
+        logger.exception("Failed to post the %s reply", kind)
+
+
+def _thank_the_board(state: game.GameState, uri: str) -> None:
+    """Name everyone who played a cleared board, under its game-over post."""
+    if state.status != game.CLEARED:
+        return
+    try:
+        text, dids = build_board_thanks(db.board_players(state.game_id))
+    except Exception:
+        logger.exception("Failed to gather the board's players")
+        return
+    _reply_to_own_post(uri, text, "thanks", dids, state.game_id)
+
+
 def leaders_with_pending_move(leaders: list, did: str, handle: str,
                               points: int) -> list:
     """Include the just-played move without saving it before posting succeeds."""
@@ -1775,6 +1859,8 @@ def _game_tick() -> None:
     # Announced last of the extras, so the total it quotes is the one the
     # recorded move produced rather than one this turn has yet to save.
     _announce_milestones(state, [(caller_did, state.last_caller, points)])
+    # After the move is recorded, so the player who finished it is named.
+    _thank_the_board(state, uri)
     db.save_state(state)
 
     if finished:
@@ -1878,6 +1964,7 @@ def _play_knockout_turn(state: game.GameState, replies: list,
     _announce_milestones(state, [(p.did, p.handle, p.points) for p in plays]
                          + [(m.did, m.handle, CASCADE_CREDIT)
                             for m in superseded])
+    _thank_the_board(state, uri)
 
     if not finished:
         _resolve_flags(state, last.coord, last.result, revealed_before)
@@ -2072,6 +2159,15 @@ def weekly_leaderboard(now: datetime | None = None) -> str:
     _remember(uri, "leaderboard", None)
     logger.info("Posted the weekly standings (%d this week, %d all time)",
                 len(weekly), len(all_time))
+    # The standings went out; the welcome under them is a bonus and must
+    # never make a posted table look like a failure that needs repeating.
+    try:
+        newcomers, returners = db.weekly_arrivals(start)
+        reply, reply_dids = build_arrivals_text(newcomers, returners)
+    except Exception:
+        logger.exception("Failed to gather the week's arrivals")
+        reply, reply_dids = "", {}
+    _reply_to_own_post(uri, reply, "arrivals", reply_dids, None)
     return uri
 
 

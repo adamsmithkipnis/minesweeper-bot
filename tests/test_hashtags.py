@@ -110,6 +110,15 @@ class ThePool(unittest.TestCase):
             self.assertEqual(value, tag.lstrip("#"), tag)
             self.assertEqual(text.encode()[start:end].decode(), tag, tag)
 
+    def test_no_tag_claims_a_tool_this_project_does_not_use(self):
+        """Popular with the audience, and untrue here: this is Python and
+        Pillow, not an engine, and the game is not Microsoft's."""
+        pool = {t.lower() for t in config.HASHTAG_POOL}
+        for claim in ("#godot", "#blender", "#madewithgodot", "#unity",
+                      "#unity3d", "#madewithunity", "#unrealengine",
+                      "#microsoftminesweeper"):
+            self.assertNotIn(claim, pool)
+
     def test_no_tag_is_purely_numeric(self):
         for tag in config.HASHTAG_POOL:
             self.assertTrue(re.search(r"[A-Za-z]", tag), tag)
