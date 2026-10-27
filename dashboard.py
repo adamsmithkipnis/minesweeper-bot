@@ -66,14 +66,19 @@ def live_replies(post_uri: str) -> list:
         return []
     try:
         response = _http.get(PUBLIC_API + "app.bsky.feed.getPostThread",
-                             params={"uri": post_uri, "depth": 1})
+                             params={"uri": post_uri,
+                                     "depth": votes.FOLLOW_UP_DEPTH})
         response.raise_for_status()
         thread = response.json().get("thread", {})
     except Exception:
         return []
 
     out = []
-    for item in thread.get("replies", []) or []:
+    items = votes.with_follow_ups(
+        thread.get("replies", []),
+        lambda item: ((item.get("post") or {}).get("author") or {}).get("did", ""),
+        lambda item: item.get("replies"))
+    for item in items:
         post = item.get("post") or {}
         record = post.get("record") or {}
         author = post.get("author") or {}
