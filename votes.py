@@ -23,14 +23,23 @@ from dataclasses import dataclass
 _VOTE_WORDS = (
     r"vote|votes|voting|pick|picks|picking|choose|choice|go|going|goes|play|"
     r"plays|open|opens|opening|reveal|reveals|click|clicks|try|hit|take|say|"
-    r"calling|call"
+    r"calling|call|"
+    # Corrections: "meant F8", "actually F8", "switch to F8", "make that F8".
+    r"meant|mean|actually|instead|switch to|switching to|change to|"
+    r"changing to|make that|make it"
 )
+
+# "F8 instead" names the choice after the coordinate rather than before it.
+# "instead of F7" is the opposite, and is caught by _AVOID_WORDS.
+_CHOICE_AFTER = re.compile(r"^[^A-Za-z0-9]{0,4}instead\b(?!\s+of\b)",
+                           re.IGNORECASE)
 
 # Words that mean the opposite: the coordinate after them is being warned
 # about, not chosen.
 _AVOID_WORDS = (
     r"not|don'?t|do not|cannot|can'?t|never|avoid|isn'?t|except|but not|skip|"
-    r"flag|flagging|flagged|careful|beware|steer clear of|mine at|bomb at"
+    r"flag|flagging|flagged|careful|beware|steer clear of|mine at|bomb at|"
+    r"instead of|rather than"
 )
 
 # The subset of warnings that are a positive claim "there is a mine here".
@@ -84,6 +93,16 @@ _UNCHECK_BEFORE = re.compile(
     r"|clear(?:\s+the)?\s+check(?:\s+(?:on|from|at))?)\b[^A-Za-z0-9]{0,4}$",
     re.IGNORECASE)
 
+# "Cancel F7" takes back a move. Left unhandled it was the only coordinate in
+# the reply, so it parsed as a vote FOR F7, and "Cancel F7. Meant F8" named
+# two cells with no voting word and counted as nothing: either way F7 opened.
+_CANCEL_BEFORE = re.compile(
+    r"\b(?:cancel(?:l?ed|l?ing)?|scratch(?:ed)?|scrap(?:ped)?|disregard|"
+    r"withdraw(?:ing|n)?)\b"
+    r"(?:\s+(?:my|the|that))?(?:\s+(?:vote|move|pick)(?:\s+(?:for|on|to|at))?)?"
+    r"[^A-Za-z0-9]{0,4}$",
+    re.IGNORECASE)
+
 _LOOKBACK = 24      # characters of context examined on either side
 
 # "flag C3 and D5" flags both. A flag carries to the next coordinate only
@@ -103,6 +122,7 @@ class Mention:
     is_unflag: bool = False     # a request to take a mark off
     is_check: bool = False      # marked to check: maybe a mine, not a bet
     is_uncheck: bool = False    # a request to take a check mark off
+    is_cancel: bool = False     # taking back a move: "cancel F7"
 
 
 @dataclass(frozen=True)
@@ -159,6 +179,10 @@ def find_mentions(text: str, rows: int, cols: int) -> list:
             out.append(Mention(coord, is_uncheck=True))
             spans.append((match.start(), match.end()))
             continue
+        if _CANCEL_BEFORE.search(before):
+            out.append(Mention(coord, is_cancel=True))
+            spans.append((match.start(), match.end()))
+            continue
 
         claims_mine = (bool(_IS_MINE.match(after))
                        or bool(_FLAG_BEFORE.search(before))
@@ -171,7 +195,8 @@ def find_mentions(text: str, rows: int, cols: int) -> list:
             spans.append((match.start(), match.end()))
             continue
         warning = claims_mine or bool(_NEGATION_BEFORE.search(before))
-        choice = bool(vote_word.search(before)) and not warning
+        choice = ((bool(vote_word.search(before))
+                   or bool(_CHOICE_AFTER.match(after))) and not warning)
         out.append(Mention(coord, is_choice=choice, is_warning=warning,
                            is_flag=claims_mine))
         spans.append((match.start(), match.end()))
@@ -186,8 +211,11 @@ def find_mentions(text: str, rows: int, cols: int) -> list:
         changed = False
         for i in range(len(out)):
             if (out[i].is_flag or out[i].is_unflag or out[i].is_check
-                    or out[i].is_uncheck):
+                    or out[i].is_uncheck or out[i].is_cancel):
                 continue
+            # A cancel never carries: a player has one move to take back, so
+            # in "cancel F7, F8" the F8 is the replacement, not a second
+            # cancel.
             # An unflag carries forwards only: "unflag E1 E5" clears both.
             # Left out, E5 was a plain mention and, being last, became the
             # vote — opening a cell somebody had just asked to unmark.
@@ -249,7 +277,7 @@ def parse_vote(text: str, rows: int, cols: int) -> str | None:
     """
     candidates = [m for m in find_mentions(text, rows, cols)
                   if not m.is_warning and not m.is_unflag
-                  and not m.is_uncheck]
+                  and not m.is_uncheck and not m.is_cancel]
     if not candidates:
         undone = {m.coord for m in find_mentions(text, rows, cols)
                   if m.is_unflag}
@@ -288,6 +316,11 @@ def parse_flags(text: str, rows: int, cols: int) -> tuple:
         elif mention.is_flag:
             flagged.add(mention.coord)
     return flagged, unflagged
+
+
+def parse_cancels(text: str, rows: int, cols: int) -> set:
+    """Coordinates a reply takes back: "cancel F7", "scratch my vote for F7"."""
+    return {m.coord for m in find_mentions(text, rows, cols) if m.is_cancel}
 
 
 def parse_checks(text: str, rows: int, cols: int) -> tuple:
@@ -413,15 +446,20 @@ def collect(replies: list, unavailable: set, rows: int, cols: int) -> tuple:
     revealed cell is a misreading of the board, not a choice.
     """
     ordered = sorted(replies, key=lambda r: r.created_at or "")
-    parsed = []
+    parsed, votes = [], {}
     for reply in ordered:
         coord = parse_vote(reply.text, rows, cols)
-        if coord is None or coord in unavailable:
+        if coord is None:
+            # "Cancel F7" on its own withdraws the move, but only the move it
+            # names: cancelling some other cell is a slip, not a withdrawal.
+            if votes.get(reply.did) in parse_cancels(reply.text, rows, cols):
+                del votes[reply.did]
+            continue
+        if coord in unavailable:
             continue
         parsed.append((reply, coord))
-
-    # Later replies replace earlier ones from the same account.
-    votes = {reply.did: coord for reply, coord in parsed}
+        # Later replies replace earlier ones from the same account.
+        votes[reply.did] = coord
 
     # Credit goes to whoever called the winning cell first — but only among
     # the people still voting for it, so someone who moved on doesn't get
@@ -447,6 +485,10 @@ def unplayable_votes(replies: list, unavailable: set, rows: int,
     for reply in ordered:
         coord = parse_vote(reply.text, rows, cols)
         if coord is None:
+            # Withdrawn, so there is nothing left to explain.
+            if (reply.did in dead and dead[reply.did][1]
+                    in parse_cancels(reply.text, rows, cols)):
+                del dead[reply.did]
             continue
         if coord in unavailable:
             dead[reply.did] = (reply, coord)
@@ -458,6 +500,8 @@ def unplayable_votes(replies: list, unavailable: set, rows: int,
 def is_actionable(text: str, rows: int, cols: int) -> bool:
     """Whether a reply tried to vote or flag, as opposed to just chatting."""
     if parse_vote(text, rows, cols) is not None:
+        return True
+    if parse_cancels(text, rows, cols):
         return True
     flagged, unflagged = parse_flags(text, rows, cols)
     if flagged or unflagged:

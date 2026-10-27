@@ -233,5 +233,73 @@ class Tallying(unittest.TestCase):
                          rows[0]["coord"])
 
 
+class Corrections(unittest.TestCase):
+    """Taking a move back, or swapping it, in one reply.
+
+    "Cancel F7. Meant F8" named two cells and no voting word, so it counted
+    as nothing and F7 opened anyway; a bare "Cancel F7" counted as a vote
+    FOR F7.
+    """
+
+    def test_cancel_then_the_replacement(self):
+        for text in ("Cancel F7.  Meant F8", "cancel F7, I meant F8",
+                     "Scratch F7, F8 instead", "cancel F7, F8",
+                     "Cancelled F7, go F8"):
+            with self.subTest(text=text):
+                self.assertEqual(vote(text), "F8")
+
+    def test_a_bare_cancel_is_not_a_vote(self):
+        for text in ("Cancel F7", "scratch my vote for F7", "disregard F7",
+                     "withdraw my move to F7"):
+            with self.subTest(text=text):
+                self.assertIsNone(vote(text))
+                self.assertEqual(votes.parse_cancels(text, ROWS, COLS),
+                                 {"F7"})
+                self.assertTrue(votes.is_actionable(text, ROWS, COLS))
+
+    def test_correction_words_pick_the_cell(self):
+        for text in ("Meant F8", "actually F8", "switch to F8",
+                     "make that F8", "I mean F8", "F8 instead",
+                     "F8 instead of F7", "F8 rather than F7"):
+            with self.subTest(text=text):
+                self.assertEqual(vote(text), "F8")
+
+    def test_means_is_not_a_choice(self):
+        # Two cells, no choice: "means" must not read as "mean".
+        self.assertIsNone(vote("E6 means F7 is safe"))
+
+    def test_the_correction_replaces_the_earlier_move(self):
+        moves = votes.moves([
+            reply("a", "F7", "1"), reply("a", "Cancel F7.  Meant F8", "2"),
+        ], set(), ROWS, COLS)
+        self.assertEqual([m.coord for m in moves], ["F8"])
+
+    def test_a_bare_cancel_withdraws_the_move(self):
+        replies = [reply("a", "F7", "1"), reply("a", "Cancel F7", "2"),
+                   reply("b", "D4", "3")]
+        self.assertEqual([m.coord for m in votes.moves(
+            replies, set(), ROWS, COLS)], ["D4"])
+        result = votes.tally(replies, set(), ROWS, COLS)
+        self.assertEqual((result.coord, result.total_voters), ("D4", 1))
+
+    def test_cancelling_a_different_cell_keeps_the_move(self):
+        moves = votes.moves([
+            reply("a", "F7", "1"), reply("a", "Cancel F9", "2"),
+        ], set(), ROWS, COLS)
+        self.assertEqual([m.coord for m in moves], ["F7"])
+
+    def test_a_new_move_after_a_cancel_counts(self):
+        moves = votes.moves([
+            reply("a", "F7", "1"), reply("a", "Cancel F7", "2"),
+            reply("a", "F9", "3"),
+        ], set(), ROWS, COLS)
+        self.assertEqual([m.coord for m in moves], ["F9"])
+
+    def test_a_withdrawn_open_cell_vote_needs_no_explanation(self):
+        self.assertEqual(votes.unplayable_votes([
+            reply("a", "F7", "1"), reply("a", "Cancel F7", "2"),
+        ], {"F7"}, ROWS, COLS), [])
+
+
 if __name__ == "__main__":
     unittest.main()

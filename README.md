@@ -83,7 +83,13 @@ parser reads them properly rather than grabbing the first coordinate it sees:
 | `don't open C3, try D4` | D4 |
 | `flag C3` / `C3 is a mine` | flags C3, no vote |
 | `I vote A1, actually I pick B2` | B2 |
+| `Cancel F7. Meant F8` / `F8 instead of F7` | F8 |
+| `Cancel F7` | withdraws your F7, no vote |
 | `a good move` / `I agree` | no vote |
+
+Your latest move is the one that counts. A reply that only cancels takes
+your move back, but only if it names that move: `Cancel F9` after voting
+F7 leaves F7 in place.
 
 ### Flagging
 
