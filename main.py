@@ -1842,32 +1842,55 @@ def _confirm_ignored_flags(state: game.GameState, ignored: dict) -> None:
 
 
 class RepliesUnavailable(Exception):
-    """The turn post's replies could not be read, so the turn must wait.
+    """The turn post's replies could not be read in full, so the turn waits.
 
-    Reading them as "no replies" would play the turn as if nobody moved: the
-    bot opens a cell of its own, posts the next board, and every move on this
-    one is stranded on a post that is no longer live. That is how Turn 12 of
-    27 October opened D10 over three players' replies.
+    Playing on a bad read is playing the turn as if nobody moved: the bot
+    opens a cell of its own, posts the next board, and every move on this one
+    is stranded on a post that is no longer live. On 27 October Bluesky
+    answered Turn 11's thread with a 200 and none of its three replies, and
+    Turn 12 opened D10 over them.
     """
 
 
 _FETCH_ATTEMPTS = 3
 _FETCH_PAUSE = 5             # seconds between attempts
 _FETCH_RETRY_MINUTES = 2     # then hand the turn to a one-off retry
+# A reply the bot can never see (a blocked or deleted account) keeps a post's
+# reply count above what any read returns, so a short read only holds the
+# turn this many times before it is played with the fullest read so far.
+_SHORT_HOLDS = 3
+_short_holds: dict = {}      # post uri -> holds so far
 
 
 def _fetch_replies(uri: str) -> list:
     if not uri:
         return []
+    best, failed = None, 0
     for attempt in range(1, _FETCH_ATTEMPTS + 1):
         try:
-            return bluesky.get_replies(uri)
+            replies, complete = bluesky.read_replies(uri)
         except Exception:
+            failed += 1
             logger.exception("Failed to fetch replies from %s (attempt %d/%d)",
                              uri, attempt, _FETCH_ATTEMPTS)
-            if attempt < _FETCH_ATTEMPTS:
-                time.sleep(_FETCH_PAUSE)
-    raise RepliesUnavailable(uri)
+        else:
+            if complete:
+                _short_holds.pop(uri, None)
+                return replies
+            if best is None or len(replies) > len(best):
+                best = replies
+        if attempt < _FETCH_ATTEMPTS:
+            time.sleep(_FETCH_PAUSE)
+    if best is None:
+        raise RepliesUnavailable(uri)           # nothing came back at all
+    holds = _short_holds.get(uri, 0)
+    if holds < _SHORT_HOLDS:
+        _short_holds[uri] = holds + 1
+        raise RepliesUnavailable(uri)
+    logger.warning("Playing %s with %d replies after %d short reads", uri,
+                   len(best), holds)
+    _short_holds.pop(uri, None)
+    return best
 
 
 def _retry_turn_soon() -> None:

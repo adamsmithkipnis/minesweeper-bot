@@ -17,6 +17,7 @@ import os
 import re
 import time
 from datetime import datetime
+from types import SimpleNamespace
 
 import config
 import votes
@@ -328,33 +329,97 @@ def _author_did(item) -> str:
 def get_replies(post_uri: str) -> list:
     """Replies to a post, as votes.Reply records: the direct ones, plus each
     player's own follow-ups underneath theirs (see votes.with_follow_ups)."""
-    if _dry() or not post_uri:
-        return []
-    response = _client.app.bsky.feed.get_post_thread(
-        {"uri": post_uri, "depth": votes.FOLLOW_UP_DEPTH})
-    raw = votes.with_follow_ups(
-        getattr(response.thread, "replies", None) or [], _author_did,
-        lambda item: getattr(item, "replies", None))
+    return read_replies(post_uri)[0]
 
-    out = []
-    for item in raw:
-        post = getattr(item, "post", None)
-        if post is None:
+
+# On 27 October Bluesky answered Turn 11's thread with a 200 and none of its
+# three replies, while the post's own reply count said three. The empty answer
+# is cached per request URL (the same thread could be empty at one depth and
+# whole at the next), so asking again the same way only gets it again. Each
+# retry asks for a different depth, and the bot's reply notifications, which
+# are indexed apart from threads, are a second witness. Replies older than the
+# newest _NOTIFICATION_LIMIT notifications are the thread's job alone.
+_THREAD_DEPTHS = (votes.FOLLOW_UP_DEPTH, votes.FOLLOW_UP_DEPTH - 1,
+                  votes.FOLLOW_UP_DEPTH + 1)
+_NOTIFICATION_LIMIT = 100
+
+
+def read_replies(post_uri: str) -> tuple:
+    """(replies, complete) for a post.
+
+    The replies are the thread's (see get_replies) plus any direct reply that
+    only the bot's notifications know about. `complete` is False when the
+    post's own reply count is still higher than the direct replies found after
+    every depth has been tried; the caller decides whether to wait.
+    """
+    if _dry() or not post_uri:
+        return [], True
+    best = None
+    for depth in _THREAD_DEPTHS:
+        response = _client.app.bsky.feed.get_post_thread(
+            {"uri": post_uri, "depth": depth})
+        direct = [item for item in
+                  getattr(response.thread, "replies", None) or []
+                  if getattr(item, "post", None) is not None]
+        counted = getattr(getattr(response.thread, "post", None),
+                          "reply_count", None) or 0
+        if best is None or len(direct) > len(best[0]):
+            best = (direct, counted)
+        if counted <= len(direct):
+            break
+        logger.warning("Thread %s at depth %d shows %d of %d replies",
+                       post_uri, depth, len(direct), counted)
+    direct, counted = best
+
+    raw = votes.with_follow_ups(
+        direct, _author_did, lambda item: getattr(item, "replies", None))
+    out = [_as_reply(item.post) for item in raw
+           if getattr(item, "post", None) is not None]
+    seen = {r.uri for r in out}
+    direct_uris = {getattr(item.post, "uri", "") for item in direct}
+    for post in _notified_replies(post_uri):
+        if post.uri not in seen:
+            out.append(_as_reply(post))
+            seen.add(post.uri)
+            direct_uris.add(post.uri)
+    return out, counted <= len(direct_uris)
+
+
+def _notified_replies(post_uri: str) -> list:
+    """Direct replies to post_uri among the bot's recent reply notifications,
+    shaped like a thread's post views. A failure here costs nothing: the
+    thread is still read."""
+    try:
+        response = _client.app.bsky.notification.list_notifications(
+            {"limit": _NOTIFICATION_LIMIT, "reasons": ["reply"]})
+    except Exception:
+        logger.exception("Failed to read reply notifications")
+        return []
+    found = []
+    for note in getattr(response, "notifications", None) or []:
+        record = getattr(note, "record", None)
+        parent = getattr(getattr(record, "reply", None), "parent", None)
+        if getattr(parent, "uri", "") != post_uri:
             continue
-        record = getattr(post, "record", None)
-        reply_ref = getattr(record, "reply", None)
-        root = getattr(reply_ref, "root", None)
-        out.append(votes.Reply(
-            did=getattr(post.author, "did", "") or "",
-            handle=getattr(post.author, "handle", "") or "",
-            text=getattr(record, "text", "") or "",
-            uri=getattr(post, "uri", "") or "",
-            cid=getattr(post, "cid", "") or "",
-            created_at=getattr(record, "created_at", "") or "",
-            root_uri=getattr(root, "uri", "") or "",
-            root_cid=getattr(root, "cid", "") or "",
-        ))
-    return out
+        found.append(SimpleNamespace(author=note.author, record=record,
+                                     uri=note.uri, cid=note.cid))
+    return found
+
+
+def _as_reply(post) -> votes.Reply:
+    record = getattr(post, "record", None)
+    reply_ref = getattr(record, "reply", None)
+    root = getattr(reply_ref, "root", None)
+    return votes.Reply(
+        did=getattr(post.author, "did", "") or "",
+        handle=getattr(post.author, "handle", "") or "",
+        text=getattr(record, "text", "") or "",
+        uri=getattr(post, "uri", "") or "",
+        cid=getattr(post, "cid", "") or "",
+        created_at=getattr(record, "created_at", "") or "",
+        root_uri=getattr(root, "uri", "") or "",
+        root_cid=getattr(root, "cid", "") or "",
+    )
 
 
 # ---------------------------------------------------------------------------

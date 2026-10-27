@@ -108,6 +108,7 @@ def install_fake_crowd(voters: int, skill: float, rng: random.Random) -> None:
         return out
 
     bluesky.get_replies = fake_replies
+    bluesky.read_replies = lambda uri: (fake_replies(uri), True)
 
 
 def main() -> int:
