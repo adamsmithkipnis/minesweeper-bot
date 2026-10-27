@@ -320,13 +320,21 @@ def own_did() -> str:
     return "" if _dry() else (getattr(_client.me, "did", "") or "")
 
 
+def _author_did(item) -> str:
+    return getattr(getattr(getattr(item, "post", None), "author", None),
+                   "did", "") or ""
+
+
 def get_replies(post_uri: str) -> list:
-    """Direct replies to a post, as votes.Reply records."""
+    """Replies to a post, as votes.Reply records: the direct ones, plus each
+    player's own follow-ups underneath theirs (see votes.with_follow_ups)."""
     if _dry() or not post_uri:
         return []
     response = _client.app.bsky.feed.get_post_thread(
-        {"uri": post_uri, "depth": 1})
-    raw = getattr(response.thread, "replies", None) or []
+        {"uri": post_uri, "depth": votes.FOLLOW_UP_DEPTH})
+    raw = votes.with_follow_ups(
+        getattr(response.thread, "replies", None) or [], _author_did,
+        lambda item: getattr(item, "replies", None))
 
     out = []
     for item in raw:

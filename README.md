@@ -91,6 +91,10 @@ Your latest move is the one that counts. A reply that only cancels takes
 your move back, but only if it names that move: `Cancel F9` after voting
 F7 leaves F7 in place.
 
+Replies count whether they are made to the board post or under your own
+earlier reply, so correcting yourself in place works. Replies under somebody
+else's move are discussion and are not read as moves.
+
 ### Flagging
 
 Flagging costs no turn, so one reply can do both jobs — `C3 is a mine, so D4

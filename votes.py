@@ -471,6 +471,36 @@ def collect(replies: list, unavailable: set, rows: int, cols: int) -> tuple:
     return votes, first
 
 
+# How deep under the board post to look for a player's follow-ups.
+FOLLOW_UP_DEPTH = 6
+
+
+def with_follow_ups(items: list, author_of, replies_of) -> list:
+    """Each direct reply, plus the replies its author made underneath it.
+
+    People fix a move by replying under it: "F7", then under that, "Cancel
+    F7. Meant F8". Reading only direct replies to the board post never saw
+    the correction, so F7 opened. A nested reply counts only while the chain
+    above it is all the same author's; anyone else replying under a move is
+    discussing it, and reading that as a move would play their chatter.
+
+    The accessors keep this free of Bluesky's types, so the bot (atproto
+    objects) and the dashboard (JSON) walk threads the same way.
+    """
+    out = []
+
+    def walk(item, did):
+        for child in replies_of(item) or []:
+            if did and author_of(child) == did:
+                out.append(child)
+                walk(child, did)
+
+    for item in items or []:
+        out.append(item)
+        walk(item, author_of(item))
+    return out
+
+
 def unplayable_votes(replies: list, unavailable: set, rows: int,
                      cols: int) -> list:
     """[(reply, coord)] for players whose votes all named an open cell.
