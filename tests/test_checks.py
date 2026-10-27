@@ -221,7 +221,7 @@ class LiveTurn(unittest.TestCase):
             if (r, c) not in self.state.revealed
             and (r, c) not in self.state.mine_cells)
         self.posted, self.replies_sent = [], []
-        self._real = (main.bluesky.get_replies, main.bluesky.post_with_image,
+        self._real = (main.bluesky.read_replies, main.bluesky.post_with_image,
                       main.bluesky.post_reply, main._remember)
         main.bluesky.post_with_image = lambda text, image, alt="", **kw: (
             self.posted.append(alt) or "at://board/2")
@@ -230,7 +230,7 @@ class LiveTurn(unittest.TestCase):
         main._remember = lambda *a, **k: None
 
     def tearDown(self):
-        (main.bluesky.get_replies, main.bluesky.post_with_image,
+        (main.bluesky.read_replies, main.bluesky.post_with_image,
          main.bluesky.post_reply, main._remember) = self._real
         config.DB_PATH, config.KNOCKOUT = self._saved
 
@@ -238,7 +238,7 @@ class LiveTurn(unittest.TestCase):
         config.KNOCKOUT = knockout
         replies = [reply(t, f"did:p{i}", f"2026-11-02T10:0{i}:00Z")
                    for i, t in enumerate(texts)]
-        main.bluesky.get_replies = lambda uri: replies
+        main.bluesky.read_replies = lambda uri: (replies, True)
         main.game_tick()
 
     def check_turn(self, knockout):

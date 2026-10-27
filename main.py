@@ -22,6 +22,7 @@ import logging
 import random
 import re
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -1840,25 +1841,96 @@ def _confirm_ignored_flags(state: game.GameState, ignored: dict) -> None:
                              reply.handle)
 
 
+class RepliesUnavailable(Exception):
+    """The turn post's replies could not be read in full, so the turn waits.
+
+    Playing on a bad read is playing the turn as if nobody moved: the bot
+    opens a cell of its own, posts the next board, and every move on this one
+    is stranded on a post that is no longer live. On 27 October Bluesky
+    answered Turn 11's thread with a 200 and none of its three replies, and
+    Turn 12 opened D10 over them.
+    """
+
+
+_FETCH_ATTEMPTS = 3
+_FETCH_PAUSE = 5             # seconds between attempts
+_FETCH_RETRY_MINUTES = 2     # then hand the turn to a one-off retry
+# A reply the bot can never see (a blocked or deleted account) keeps a post's
+# reply count above what any read returns, so a short read only holds the
+# turn this many times before it is played with the fullest read so far.
+_SHORT_HOLDS = 3
+_short_holds: dict = {}      # post uri -> holds so far
+
+
 def _fetch_replies(uri: str) -> list:
     if not uri:
         return []
-    try:
-        return bluesky.get_replies(uri)
-    except Exception:
-        logger.exception("Failed to fetch replies from %s", uri)
-        return []
+    best, failed = None, 0
+    for attempt in range(1, _FETCH_ATTEMPTS + 1):
+        try:
+            replies, complete = bluesky.read_replies(uri)
+        except Exception:
+            failed += 1
+            logger.exception("Failed to fetch replies from %s (attempt %d/%d)",
+                             uri, attempt, _FETCH_ATTEMPTS)
+        else:
+            if complete:
+                _short_holds.pop(uri, None)
+                return replies
+            if best is None or len(replies) > len(best):
+                best = replies
+        if attempt < _FETCH_ATTEMPTS:
+            time.sleep(_FETCH_PAUSE)
+    if best is None:
+        raise RepliesUnavailable(uri)           # nothing came back at all
+    holds = _short_holds.get(uri, 0)
+    if holds < _SHORT_HOLDS:
+        _short_holds[uri] = holds + 1
+        raise RepliesUnavailable(uri)
+    logger.warning("Playing %s with %d replies after %d short reads", uri,
+                   len(best), holds)
+    _short_holds.pop(uri, None)
+    return best
+
+
+def _retry_turn_soon() -> None:
+    """Play the turn again in a couple of minutes instead of a whole interval.
+
+    Nothing has been saved or posted, so the retry starts from the same state
+    and reads the same post, plus whatever arrived in between. Only the
+    scheduler's own ticks get one; `--play` has no scheduler running.
+    """
+    if not scheduler.running:
+        return
+    run_date = datetime.now().astimezone() + timedelta(
+        minutes=_FETCH_RETRY_MINUTES)
+    scheduler.add_job(game_tick, "date", run_date=run_date,
+                      id="game_tick_retry", replace_existing=True)
+    logger.warning("Replies unreadable; retrying the turn at %s",
+                   run_date.strftime("%H:%M:%S %Z"))
 
 
 # ---------------------------------------------------------------------------
 # The loop
 # ---------------------------------------------------------------------------
 
+# A retry and the regular tick are separate jobs, so the scheduler would run
+# them side by side; two ticks at once would play the same turn twice.
+_tick_lock = threading.Lock()
+
+
 def game_tick() -> None:
+    if not _tick_lock.acquire(blocking=False):
+        logger.warning("A turn is already being played; skipping this tick")
+        return
     try:
         _game_tick()
+    except RepliesUnavailable:
+        _retry_turn_soon()
     except Exception:
         logger.exception("game_tick failed")      # never kill the scheduler
+    finally:
+        _tick_lock.release()
 
 
 def _game_tick() -> None:
