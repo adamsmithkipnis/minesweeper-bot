@@ -16,6 +16,7 @@ import logging
 import os
 import re
 import time
+from datetime import datetime
 
 import config
 import votes
@@ -185,18 +186,18 @@ def post_with_image(text: str, image: bytes, alt: str = "", kind: str = "post",
     alt = clamp(alt or "Minesweeper board.", ALT_LIMIT)
     if _dry():
         return _remember_cid(_write_dry(text, kind, image, alt, extra_dids))
-    return _remember_cid(_client.send_image(
+    return _remember_cid(_send_or_adopt(text, lambda: _client.send_image(
         text=text, image=image, image_alt=alt,
         facets=build_facets(text, extra_dids),
-    ))
+    )))
 
 
 def post_text(text: str, kind: str = "post", extra_dids: dict | None = None) -> str:
     text = clamp(text)
     if _dry():
         return _remember_cid(_write_dry(text, kind, extra_dids=extra_dids))
-    return _remember_cid(_client.send_post(
-        text=text, facets=build_facets(text, extra_dids)))
+    return _remember_cid(_send_or_adopt(text, lambda: _client.send_post(
+        text=text, facets=build_facets(text, extra_dids))))
 
 
 def _remember_cid(posted) -> str:
@@ -225,10 +226,78 @@ def post_reply(text: str, parent_uri: str, parent_cid: str,
     parent = models.ComAtprotoRepoStrongRef.Main(uri=parent_uri, cid=parent_cid)
     root = (models.ComAtprotoRepoStrongRef.Main(uri=root_uri, cid=root_cid)
             if root_uri and root_cid else parent)
-    return _client.send_post(
+    return _send_or_adopt(text, lambda: _client.send_post(
         text=text, facets=build_facets(text, extra_dids),
         reply_to=models.AppBskyFeedPost.ReplyRef(parent=parent, root=root),
-    ).uri
+    ), parent_uri=parent_uri).uri
+
+
+# A post can be published and still fail here. The request reaches Bluesky,
+# the post goes up, and the response times out on its way back, so the bot
+# never learns the URI. For a board post that is the worst outcome: players
+# reply to a post the bot does not know it made, and every one of them is
+# ignored. So a failure is only believed once the account's newest posts have
+# been checked for the one we tried to make.
+_ADOPT_ATTEMPTS = 3
+_ADOPT_PAUSE = 2         # seconds between looks; the commit may land late
+_ADOPT_LOOKBACK = 25     # newest records to search
+_ADOPT_SLACK = 60        # seconds; createdAt comes from our own clock
+
+
+class _Adopted:
+    """Stands in for atproto's response: the two fields the callers read."""
+
+    def __init__(self, uri: str, cid: str):
+        self.uri, self.cid = uri, cid
+
+
+def _send_or_adopt(text: str, send, parent_uri: str = ""):
+    started = time.time()
+    try:
+        return send()
+    except Exception:
+        found = find_published(text, started - _ADOPT_SLACK, parent_uri)
+        if found is None:
+            raise
+        logger.warning("Post failed locally but Bluesky published it; "
+                       "adopting %s", found.uri)
+        return found
+
+
+def find_published(text: str, since: float, parent_uri: str = ""):
+    """Our own post with exactly this text, made after `since`, or None.
+
+    A reply must also sit under `parent_uri`: two players can be sent the
+    same words, and adopting the other one's reply would misfile it.
+    """
+    for attempt in range(_ADOPT_ATTEMPTS):
+        if attempt:
+            time.sleep(_ADOPT_PAUSE)
+        try:
+            page = _client.com.atproto.repo.list_records({
+                "repo": _client.me.did, "collection": POST_COLLECTION,
+                "limit": _ADOPT_LOOKBACK,
+            })
+        except Exception as exc:
+            logger.warning("Could not check whether the post went up: %s", exc)
+            continue
+        for record in page.records:        # newest first
+            value = record.value
+            reply = getattr(value, "reply", None)
+            parent = getattr(getattr(reply, "parent", None), "uri", "") or ""
+            if (getattr(value, "text", "") == text
+                    and parent == parent_uri
+                    and _timestamp(getattr(value, "created_at", "")) >= since):
+                return _Adopted(record.uri, record.cid)
+    return None
+
+
+def _timestamp(value: str) -> float:
+    try:
+        return datetime.fromisoformat(
+            (value or "").replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
 
 
 # ---------------------------------------------------------------------------
