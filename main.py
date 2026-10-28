@@ -2023,8 +2023,8 @@ def _game_tick() -> None:
 
     # Flags shown on the board are the crowd's claims and nothing more: a
     # right flag and a wrong one are drawn identically until the cell opens.
-    flags = {c for c in db.flagged_coords(state.game_id, config.FLAG_QUORUM)
-             if not state.coord_is_revealed(c)}
+    flags = state.shown_flags(
+        db.flagged_coords(state.game_id, config.FLAG_QUORUM))
 
     finished = state.status != game.ACTIVE
     record = db.get_record()
@@ -2165,8 +2165,8 @@ def _play_knockout_turn(state: game.GameState, replies: list,
     state.last_votes = 0
     state.last_voters = sum(1 for p in plays if p.did)
 
-    flags = {c for c in db.flagged_coords(state.game_id, config.FLAG_QUORUM)
-             if not state.coord_is_revealed(c)}
+    flags = state.shown_flags(
+        db.flagged_coords(state.game_id, config.FLAG_QUORUM))
     finished = state.status != game.ACTIVE
     record = db.get_record()
 

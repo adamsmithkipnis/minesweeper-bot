@@ -127,8 +127,8 @@ def snapshot() -> dict:
     standings = votes.breakdown(replies, already_open, state.rows, state.cols)
     winner = votes.tally(replies, already_open, state.rows, state.cols)
 
-    flags = {c for c in db.flagged_coords(state.game_id, config.FLAG_QUORUM)
-             if not state.coord_is_revealed(c)}
+    flags = state.shown_flags(
+        db.flagged_coords(state.game_id, config.FLAG_QUORUM))
     flag_counts = db.flag_counts(state.game_id)
 
     data["board"] = {
@@ -179,8 +179,8 @@ def board_png():
     state = db.load_state()
     if state is None:
         return Response("no board", status=404)
-    flags = {c for c in db.flagged_coords(state.game_id, config.FLAG_QUORUM)
-             if not state.coord_is_revealed(c)}
+    flags = state.shown_flags(
+        db.flagged_coords(state.game_id, config.FLAG_QUORUM))
     return Response(renderer.render_board(state, highlight=state.last_coord,
                                           flags=flags),
                     mimetype="image/png")
