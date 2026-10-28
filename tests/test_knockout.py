@@ -646,3 +646,31 @@ class QuietTurnsTeach(unittest.TestCase):
         self.assertLessEqual(len(text), 300)
         crowd = main.build_turn_text(self.state, "D4", None, "crowd", why=why)
         self.assertNotIn("🧠", crowd)
+
+
+class FlagsOnSpentMines(unittest.TestCase):
+    """A flag left on a mine that has gone off is counted once, not twice.
+
+    The mine counter is mines − flags − detonations, so a flag that survives
+    on a spent mine pulled it one too low — players saw 1 with two mines
+    still hidden, and -1 on a swept board.
+    """
+
+    def setUp(self):
+        self.state = game.GameState(
+            game_id=1, rows=3, cols=3, mine_count=2,
+            mine_cells={(0, 0), (2, 2)}, mine_budget=1)
+        self.state.revealed[(1, 1)] = self.state.adjacent_mines(1, 1)
+        game.reveal(self.state, 0, 0)
+
+    def test_spent_and_opened_cells_drop_out(self):
+        shown = self.state.shown_flags({"A1", "B2", "C3"})
+        self.assertEqual(shown, {"C3"})
+
+    @unittest.skipUnless(HAS_PILLOW, "renderer needs Pillow")
+    def test_alt_text_counts_only_standing_flags(self):
+        flags = self.state.shown_flags({"A1", "C3"})
+        alt = renderer.build_alt_text(self.state, flags)
+        self.assertIn("1 flagged", alt)
+        self.assertEqual(
+            self.state.mine_count - len(flags) - self.state.detonations, 0)

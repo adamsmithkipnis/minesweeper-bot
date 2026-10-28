@@ -129,6 +129,23 @@ class GameState:
         except ValueError:
             return False
 
+    def shown_flags(self, flagged) -> set:
+        """The flags still standing on a hidden cell.
+
+        A flag on an opened cell is moot, and one on a spent mine is already
+        counted as a detonation; counting it again as a flag would pull the
+        mine counter one too low.
+        """
+        out = set()
+        for coord in flagged:
+            try:
+                cell = coord_to_index(coord)
+            except ValueError:
+                continue
+            if cell not in self.revealed and cell not in self.spent_mines:
+                out.add(coord)
+        return out
+
     def in_bounds(self, coord: str) -> bool:
         try:
             r, c = coord_to_index(coord)
