@@ -522,7 +522,7 @@ def build_welcome_line() -> str:
     if not ladder:
         return "👋 Welcome — that was your first move! Glad you're here."
     if ladder[0] <= 2:
-        invite = "Come back another day to earn your first badge."
+        invite = "Keep playing! A move on a second day earns your first badge."
     else:
         invite = f"Play on {ladder[0]} different days to earn your first badge."
     return f"👋 Welcome — that was your first move! {invite}"
