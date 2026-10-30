@@ -75,7 +75,7 @@ class WelcomeCopy(unittest.TestCase):
         out = main.build_credit_reply(self.state, "A1", _Vote(), 8, 8, 8,
                                       first_move=True)
         self.assertIn("first move", out)
-        self.assertIn("Come back another day", out)
+        self.assertIn("a second day", out)
         self.assertIn("All time: 8", out)
 
     def test_nobody_else_is_welcomed(self):
