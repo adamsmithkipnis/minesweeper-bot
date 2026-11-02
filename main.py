@@ -441,6 +441,8 @@ def build_knockout_credit_reply(state: game.GameState, play,
         head = (f"🎯 You opened {play.coord} on turn {state.turn_number} — "
                 f"it {_outcome_phrase(state, play.coord, play.result)}.")
         scored = f"\n+{_plural(play.points, 'point')}"
+        if capped_move(state, play.points):
+            scored += ", the most one move scores on the big board"
     welcome = f"\n\n{build_welcome_line()}" if first_move else ""
     return _with_tags(
         f"{head}\n{scored}\n"
@@ -996,6 +998,25 @@ def tier_multiplier(state: game.GameState | None) -> int:
     return tier_of(state) + 1
 
 
+def move_points(state: game.GameState | None, cells: int) -> int:
+    """What a move that opened `cells` cells scores.
+
+    On the big board a single move is capped at MASSIVE_MOVE_CAP: its blank
+    regions are wide enough that one lucky click can open most of the board,
+    and paying that in full turns the day's standings into a lottery.
+    """
+    points = cells * tier_multiplier(state)
+    if config.MASSIVE_MOVE_CAP and is_massive(state):
+        points = min(points, config.MASSIVE_MOVE_CAP)
+    return points
+
+
+def capped_move(state: game.GameState | None, points: int) -> bool:
+    """Whether a move's points are the big board's cap."""
+    return bool(config.MASSIVE_MOVE_CAP and is_massive(state)
+                and points >= config.MASSIVE_MOVE_CAP)
+
+
 def participation_of(previous: game.GameState, crowd_moves: int | None) -> float:
     if crowd_moves is None:
         crowd_moves = sum(1 for move in db.get_moves(previous.game_id, limit=1000)
@@ -1193,8 +1214,8 @@ def apply_knockout_moves(state: game.GameState, replies: list,
             newly_opened = set(state.revealed) - before_cells
             cascade_opened.update(newly_opened - {index})
             plays.append(Play(move.did, move.handle, move.coord, outcome,
-                              (len(state.revealed) - len(before_cells))
-                              * tier_multiplier(state),
+                              move_points(state, len(state.revealed)
+                                          - len(before_cells)),
                               reply_uri=move.reply.uri,
                               reply_cid=move.reply.cid,
                               root_uri=move.reply.root_uri,
@@ -1223,7 +1244,7 @@ def apply_knockout_moves(state: game.GameState, replies: list,
     outcome = game.reveal(state, *cell)
     logger.info("Turn %d by bot (%s): %s", state.turn_number, reason, coord)
     return ([Play("", "", coord, outcome,
-                  (len(state.revealed) - before) * tier_multiplier(state),
+                  move_points(state, len(state.revealed) - before),
                   note=reason,
                   why=solver.explain(position, cell, analysis))],
             "bot", superseded, duplicates)
@@ -2061,8 +2082,7 @@ def _game_tick() -> None:
         _record_assists(state, position, index)
     # A move scores the cells it opened — a blank that cascades is worth
     # more than a single numbered cell, and a mine scores nothing.
-    points = ((len(state.revealed) - len(revealed_before))
-              * tier_multiplier(state))
+    points = move_points(state, len(state.revealed) - len(revealed_before))
     caller_did = vote.caller.did if (vote and source == "crowd" and vote.caller) else ""
 
     state.last_coord = coord

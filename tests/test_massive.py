@@ -6,6 +6,7 @@ resumes exactly where it would have been; and a 26x26 board still fits in
 every post, its alt text and its image.
 """
 
+import copy
 import os
 import random
 import tempfile
@@ -13,7 +14,7 @@ import unittest
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from helpers import config, db, game, main
+from helpers import config, db, game, main, solver, votes
 import renderer
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
@@ -160,6 +161,67 @@ class WhatItIs(_Config):
         self.assertEqual(main.next_tier(done), 0)
         db.set_setting("massive_resume_tier", "9")
         self.assertEqual(main.next_tier(done), 2)
+
+
+class OneMoveIsCapped(_Config):
+    """On a 26x26 at 13% one click once opened 374 of 588 cells in the
+    simulator, and the top tenth of moves took 71% of the points. The cap
+    keeps the day's standings about play rather than one lucky cascade."""
+
+    def setUp(self):
+        super().setUp()
+        self._cap = config.MASSIVE_MOVE_CAP
+        config.MASSIVE_MOVE_CAP = 20
+
+    def tearDown(self):
+        config.MASSIVE_MOVE_CAP = self._cap
+        super().tearDown()
+
+    def test_a_big_cascade_scores_the_cap(self):
+        big = self.board(26, 26, 88)
+        self.assertEqual(main.move_points(big, 374), 20)
+        self.assertEqual(main.move_points(big, 5), 5)
+        self.assertEqual(main.move_points(big, 20), 20)
+
+    def test_regular_boards_are_not_capped(self):
+        self.assertEqual(main.move_points(self.board(11, 11, 24, budget=3),
+                                          30), 90)
+
+    def test_zero_lifts_it(self):
+        config.MASSIVE_MOVE_CAP = 0
+        self.assertEqual(main.move_points(self.board(26, 26, 88), 374), 374)
+
+    def test_a_live_turn_pays_the_cap(self):
+        state = self.board(26, 26, 88)
+        position = solver.Position.from_state(state)
+        analysis = solver.analyze(position)
+        # The first hidden safe cell whose flood-fill opens more than the cap.
+        for row, col in sorted(set(position.hidden()) - state.mine_cells):
+            trial = copy.deepcopy(state)
+            game.reveal(trial, row, col)
+            if len(trial.revealed) - len(state.revealed) > 20:
+                break
+        else:
+            self.fail("seed produced no cascade over the cap")
+        coord = game.index_to_coord(row, col)
+        already = {game.index_to_coord(r, c) for r, c in state.revealed}
+        reply = votes.Reply(did="did:a", handle="a.bsky.social", text=coord,
+                            uri="at://a/x", cid="c", created_at="1")
+        plays, *_ = main.apply_knockout_moves(state, [reply], already,
+                                              position, analysis)
+        self.assertEqual([p.points for p in plays], [20])
+
+    def test_the_reply_says_it_hit_the_cap(self):
+        state = self.board(26, 26, 88)
+        coord = game.index_to_coord(*sorted(state.revealed)[0])
+        play = main.Play("did:a", "a.bsky.social", coord, game.SAFE, 20)
+        text = main.build_knockout_credit_reply(state, play, 40, 900,
+                                                first_move=True)
+        self.assertIn("+20 points, the most one move scores", text)
+        self.assertLessEqual(len(text), 300)
+        play.points = 7
+        self.assertNotIn("the most one move", main.build_knockout_credit_reply(
+            state, play, 40, 900))
 
 
 class StartingBoards(_Config):
