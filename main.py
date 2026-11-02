@@ -151,13 +151,13 @@ def _credit_line(vote, source: str) -> str:
     """Say who chose this cell. Naming the caller is the point: it makes a
     follower's influence visible.
 
-    The name is plain text, not an @mention. The caller already gets a
-    credit reply under their own post, and a mention here as well meant two
-    notifications for one move — the reason a regular player gave for
-    leaving. The reply is the one to keep: it carries their score.
+    The mention is deliberate even though the caller also gets a credit
+    reply: the mention's notification opens the *new* board, which players
+    use to jump straight to the next turn. Anyone who finds two
+    notifications a move too many replies "no tags" (see `_record_tag_prefs`).
     """
     if source == "crowd" and vote is not None:
-        return (f"🫡 {vote.caller_handle} called it "
+        return (f"🫡 @{vote.caller_handle} called it "
                 f"({vote.votes} of {vote.total_voters} votes)")
     if vote is None:
         return "🤖 No votes came in, so I played it myself."
@@ -1281,11 +1281,8 @@ def build_knockout_turn_text(state: game.GameState, plays: list,
     # only while the prompt still fits.
     if not movers and plays and plays[0].why:
         lines.append(_explained(plays[0].why))
-    # Names below are plain text, not @mentions: every player here also gets
-    # a credit reply, and one notification per move is plenty (see
-    # `_credit_line`).
     for play in out[:2]:
-        lines.append(f"💥 {play.handle} hit {play.coord} and is out. "
+        lines.append(f"💥 @{play.handle} hit {play.coord} and is out. "
                      f"{_plural(state.spares_left, 'spare')} left.")
 
     # The prompt is fixed and must survive, so budget against its real length
@@ -1303,7 +1300,7 @@ def build_knockout_turn_text(state: game.GameState, plays: list,
     if scorers:
         shown, dropped = [], 0
         for play in scorers:
-            entry = f"{play.handle} +{play.points}"
+            entry = f"@{play.handle} +{play.points}"
             trial = lines + ["🏅 " + " · ".join(shown + [entry])]
             if len("\n".join(trial)) <= room:
                 shown.append(entry)
@@ -1560,6 +1557,51 @@ def _send_notice(state: game.GameState, reply, text: str, kind: str) -> bool:
         return False
     _remember(uri, kind, state.game_id, state.turn_number)
     return True
+
+
+def build_tag_pref_reply(tagged: bool) -> str:
+    if tagged:
+        return ("🔔 Done — I'll @-tag you again whenever a post names you, "
+                "so the notification takes you straight to the new board.")
+    return ("🔕 Got it — no more @-tags. Posts will still name you, just "
+            "without the tag, and I'll still answer your moves. Reply "
+            "\"tag me\" any time to switch it back on.")
+
+
+def _load_untagged() -> None:
+    """Best-effort: a failed read keeps the last set rather than tagging all."""
+    try:
+        bluesky.set_untagged(db.untagged_dids())
+    except Exception:
+        logger.exception("Failed to load mention preferences")
+
+
+def _record_tag_prefs(state: game.GameState, replies: list) -> None:
+    """Act on "no tags" / "tag me", and confirm it once per reply.
+
+    The newest request per player wins, and only that one is answered, so
+    changing your mind within a turn gets one reply, not two. Recorded
+    before the turn posts, so this turn's board already honours it.
+    """
+    # The confirmation itself says "tag me", and it sits in the same thread.
+    me = bluesky.own_did()
+    latest = {}
+    for reply in sorted(replies, key=lambda r: r.created_at or ""):
+        wanted = votes.parse_tag_pref(reply.text)
+        if wanted is not None and reply.did and reply.did != me:
+            latest[reply.did] = (reply, wanted)
+    for did, (reply, wanted) in latest.items():
+        try:
+            db.set_tagging(did, wanted)
+        except Exception:
+            logger.exception("Failed to record %s's mention preference",
+                             reply.handle)
+            continue
+        logger.info("%s asked to be %s", reply.handle,
+                    "tagged" if wanted else "left untagged")
+        _send_notice(state, reply, build_tag_pref_reply(wanted), "tagpref")
+    if latest:
+        _load_untagged()
 
 
 def _notify_benched_moves(state: game.GameState, moves: list) -> None:
@@ -2023,6 +2065,7 @@ def game_tick() -> None:
 
 
 def _game_tick() -> None:
+    _load_untagged()
     state = db.load_state()
     if state is None:
         logger.warning("No board found on tick; starting one")
@@ -2043,6 +2086,10 @@ def _game_tick() -> None:
     vote = votes.tally(replies, already_open, state.rows, state.cols)
 
     _explain_uncounted_replies(state, replies, already_open)
+    try:
+        _record_tag_prefs(state, replies)
+    except Exception:
+        logger.exception("Failed to read mention preferences")
 
     claimed, withdrawn, ignored = votes.collect_flag_changes(
         replies, already_open, state.rows, state.cols,
@@ -2537,6 +2584,7 @@ def weekly_leaderboard(now: datetime | None = None) -> str:
         return ""
     text, dids = build_leaderboard_text(all_time, weekly, start, now,
                                         db.flag_scores())
+    _load_untagged()
     uri = bluesky.post_text(text, kind="leaderboard", extra_dids=dids)
     _remember(uri, "leaderboard", None)
     logger.info("Posted the weekly standings (%d this week, %d all time)",
