@@ -1142,11 +1142,21 @@ def flag_points(did: str, game_id: int | None = None) -> int:
 
 def eliminate(game_id: int, did: str, handle: str, coord: str,
               turn_number: int) -> None:
+    """Bench a player from this turn on.
+
+    One row per player per board, so the tally counts people, not mines. A
+    second mine moves that row to the new turn: ignoring it, as this once
+    did, told a returning player "you're out for 4 turns" and then let them
+    straight back in.
+    """
     with _connect() as conn:
         conn.execute(
-            """INSERT OR IGNORE INTO eliminations
+            """INSERT INTO eliminations
                (game_id, did, handle, coord, turn_number)
-               VALUES (?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT (game_id, did) DO UPDATE SET
+                   handle = excluded.handle, coord = excluded.coord,
+                   turn_number = excluded.turn_number""",
             (game_id, did, handle, coord, turn_number))
 
 
@@ -1182,6 +1192,21 @@ def benched(game_id: int, turn_number: int, duration: int) -> set:
                 "WHERE game_id = ? AND turn_number >= ?",
                 (game_id, turn_number - duration)).fetchall()
     return {row["did"] for row in rows}
+
+
+def back_on_turn(game_id: int, did: str, duration: int) -> int | None:
+    """The first turn a benched player may move again, or None.
+
+    None both for somebody never knocked out and, with `duration` 0, for
+    somebody out for the rest of the board.
+    """
+    if duration <= 0:
+        return None
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT turn_number FROM eliminations WHERE game_id = ? AND did = ?",
+            (game_id, did)).fetchone()
+    return row["turn_number"] + duration + 1 if row else None
 
 
 def eliminations(game_id: int) -> list:

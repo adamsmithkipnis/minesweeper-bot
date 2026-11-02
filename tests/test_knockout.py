@@ -424,6 +424,93 @@ class EliminationExpiry(unittest.TestCase):
         self.assertEqual(db.benched(1, 13, 4), {"did:b"})
         self.assertNotIn("did:a", db.benched(1, 13, 4))
 
+    def test_a_second_mine_benches_the_same_player_again(self):
+        """Back on turn 10, a mine on turn 12 must bench them again. The
+        reply already says "you're out for 4 turns"; ignoring the second
+        elimination made that untrue."""
+        db.eliminate(1, "did:a", "a", "D4", turn_number=12)
+        self.assertEqual(db.benched(1, 13, 4), {"did:a"})
+        self.assertEqual(db.back_on_turn(1, "did:a", 4), 17)
+        self.assertEqual(len(db.eliminations(1)), 1, "one row per player")
+
+    def test_back_on_turn(self):
+        self.assertEqual(db.back_on_turn(1, "did:a", 4), 10)
+        self.assertIsNone(db.back_on_turn(1, "did:a", 0))
+        self.assertIsNone(db.back_on_turn(1, "did:nobody", 4))
+
+
+class BenchedMovesAreAnswered(unittest.TestCase):
+    """A benched player's move is held back, and they are told so.
+
+    @lhbm hit a mine on turn 12, replied B2 on turn 15, and heard nothing:
+    the move was excluded and nobody explained why.
+    """
+
+    def setUp(self):
+        self._old = config.DB_PATH
+        config.DB_PATH = os.path.join(tempfile.mkdtemp(), "benched.db")
+        db.init_db()
+
+    def tearDown(self):
+        config.DB_PATH = self._old
+
+    def move(self, coord="B2"):
+        return votes.Move("did:a", "a.bsky.social", coord,
+                          reply("did:a", coord))
+
+    def test_the_reply_says_when_they_are_back(self):
+        state = game.new_game(1)
+        state.turn_number = 15
+        text = main.build_benched_reply(state, self.move(), 17)
+        self.assertIn("B2 wasn't played", text)
+        self.assertIn("back on turn 17, after 1 more turn", text)
+        self.assertIn("flag & check", text)
+        self.assertLessEqual(len(text), 300)
+
+    def test_the_reply_when_the_bench_has_just_ended(self):
+        state = game.new_game(1)
+        state.turn_number = 16
+        text = main.build_benched_reply(state, self.move(), 17)
+        self.assertIn("back now: turn 17 is open", text)
+
+    def test_the_reply_for_a_whole_board_bench(self):
+        state = game.new_game(1)
+        text = main.build_benched_reply(state, self.move(), None)
+        self.assertIn("rest of this board", text)
+
+    def test_a_benched_move_is_answered_once_and_not_played(self):
+        state = game.new_game(1, rng=random.Random(5), mine_budget=2)
+        db.eliminate(1, "did:a", "a", "A1", state.turn_number)
+        hidden = [game.index_to_coord(r, c)
+                  for r in range(state.rows) for c in range(state.cols)
+                  if (r, c) not in state.revealed
+                  and (r, c) not in state.mine_cells]
+        already = {game.index_to_coord(r, c) for r, c in state.revealed}
+
+        sent = []
+        real = (main._post_board, main.bluesky.post_reply, main._remember)
+        main._post_board = lambda *a, **k: "at://board/1"
+        main.bluesky.post_reply = lambda text, **kw: (
+            sent.append((kw.get("parent_uri"), text)) or "at://sent/1")
+        main._remember = lambda *a, **k: None
+        try:
+            for _ in range(2):          # a replayed turn must not say it twice
+                main._play_knockout_turn(
+                    copy.deepcopy(state),
+                    [reply("did:a", hidden[0], "1"),
+                     reply("did:b", hidden[1], "2")],
+                    already, solver.Position.from_state(state),
+                    solver.analyze(solver.Position.from_state(state)), {}, {})
+        finally:
+            main._post_board, main.bluesky.post_reply, main._remember = real
+
+        benched = [t for uri, t in sent
+                   if uri == "at://did:a/x" and "still out" in t]
+        self.assertEqual(len(benched), 1, sent)
+        self.assertIn(f"{hidden[0]} wasn't played", benched[0])
+        self.assertEqual([m for m in db.get_moves(1) if m["did"] == "did:a"],
+                         [])
+
 
 @unittest.skipUnless(HAS_PILLOW, "Pillow not installed (use .venv/bin/python)")
 class EveryMoverIsAcknowledged(unittest.TestCase):

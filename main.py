@@ -494,6 +494,29 @@ def build_duplicate_skip_reply(state: game.GameState, move) -> str:
         tags=[config.REPLY_HASHTAG])
 
 
+def build_benched_reply(state: game.GameState, move,
+                        back_on: int | None) -> str:
+    """Say why a benched player's move was not played, and when they're back.
+
+    `state.turn_number` is the turn just posted; the open one is the next.
+    """
+    if state.status != game.ACTIVE:
+        when = "That board is over now, and the next one begins soon"
+    elif back_on is None:
+        when = "You're out for the rest of this board"
+    elif back_on <= state.turn_number + 1:
+        when = (f"You're back now: turn {state.turn_number + 1} is open, so "
+                f"reply to the newest board post")
+    else:
+        wait = back_on - state.turn_number - 1
+        when = (f"You're back on turn {back_on}, after "
+                f"{_plural(wait, 'more turn')}")
+    return _with_tags(
+        f"⏸️ You're still out after hitting a mine, so {move.coord} wasn't "
+        f"played. {when}. You can still flag & check cells meanwhile.",
+        tags=[config.REPLY_HASHTAG])
+
+
 def build_open_cell_reply(coord: str) -> str:
     """Say why a vote for an already-open cell was not counted."""
     return _with_tags(
@@ -1502,6 +1525,25 @@ def _send_notice(state: game.GameState, reply, text: str, kind: str) -> bool:
     return True
 
 
+def _notify_benched_moves(state: game.GameState, moves: list) -> None:
+    """Answer benched players whose move was held back this turn.
+
+    Sent after the turn posts, so "back on turn N" counts from the turn that
+    is actually open. Claimed per reply, so a replayed turn says it once.
+    """
+    for move in moves:
+        if not move.did:
+            continue
+        try:
+            back_on = db.back_on_turn(state.game_id, move.did,
+                                      config.ELIMINATION_TURNS)
+            _send_notice(state, move.reply,
+                         build_benched_reply(state, move, back_on), "benched")
+        except Exception:
+            logger.exception("Failed to explain a benched move to %s",
+                             move.handle)
+
+
 def _notify_open_cell_votes(state: game.GameState, replies: list,
                             already_open: set, budget: int) -> int:
     """Tell players whose only vote named a cell that is already open."""
@@ -2154,6 +2196,11 @@ def _play_knockout_turn(state: game.GameState, replies: list,
     """
     revealed_before = set(state.revealed)
     entrants_before = db.player_count(state.game_id)
+    # Read before the turn plays, which may bench somebody new.
+    benched = db.benched(state.game_id, state.turn_number + 1,
+                         config.ELIMINATION_TURNS)
+    held = [m for m in votes.moves(replies, already_open, state.rows,
+                                   state.cols) if m.did in benched]
     plays, source, superseded, duplicates = apply_knockout_moves(
         state, replies, already_open, position, analysis)
 
@@ -2229,6 +2276,7 @@ def _play_knockout_turn(state: game.GameState, replies: list,
     _credit_knockout_players(state, plays)
     _notify_cascade_skips(state, superseded)
     _notify_duplicate_skips(state, duplicates)
+    _notify_benched_moves(state, held)
     _announce_milestones(state, [(p.did, p.handle, p.points) for p in plays]
                          + [(m.did, m.handle, CASCADE_CREDIT)
                             for m in superseded])
