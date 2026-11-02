@@ -531,7 +531,7 @@ def unplayable_votes(replies: list, unavailable: set, rows: int,
 # opts them back in. Checked in that order, since "don't tag me" contains
 # "tag me". Whole phrases only: "tag" alone turns up in ordinary chat.
 _TAG_OFF = re.compile(
-    r"\b(?:no\s*tags?|tags?\s+off|untag\s+me|stop\s+tagging(?:\s+me)?|"
+    r"\b(?:no\s*tags?|tags?\s+off|untag(?:\s+me)?|stop\s+tagging(?:\s+me)?|"
     r"(?:don'?t|do\s+not)\s+tag\s+me|no\s+(?:@\s*)?mentions?)\b",
     re.IGNORECASE)
 _TAG_ON = re.compile(

@@ -19,7 +19,7 @@ import bluesky
 class ParsingTheRequest(unittest.TestCase):
     def test_ways_of_opting_out(self):
         for text in ("no tags", "No tag please", "notags", "tags off",
-                     "untag me", "stop tagging me", "Stop tagging",
+                     "untag me", "untag", "Untag please", "stop tagging me", "Stop tagging",
                      "don't tag me", "do not tag me", "no mentions",
                      "no @mentions please", "D4 — and no tags"):
             self.assertIs(votes.parse_tag_pref(text), False, text)
@@ -33,7 +33,7 @@ class ParsingTheRequest(unittest.TestCase):
 
     def test_ordinary_replies_are_neither(self):
         for text in ("D4", "flag C3", "check A2", "tag, you're it",
-                     "that hashtag is great", "", None):
+                     "that hashtag is great", "I got untagged", "", None):
             self.assertIsNone(votes.parse_tag_pref(text), text)
 
 
