@@ -149,9 +149,15 @@ def _outcome_phrase(state: game.GameState, coord: str,
 
 def _credit_line(vote, source: str) -> str:
     """Say who chose this cell. Naming the caller is the point: it makes a
-    follower's influence visible, and the matching reply notifies them."""
+    follower's influence visible.
+
+    The name is plain text, not an @mention. The caller already gets a
+    credit reply under their own post, and a mention here as well meant two
+    notifications for one move — the reason a regular player gave for
+    leaving. The reply is the one to keep: it carries their score.
+    """
     if source == "crowd" and vote is not None:
-        return (f"🫡 @{vote.caller_handle} called it "
+        return (f"🫡 {vote.caller_handle} called it "
                 f"({vote.votes} of {vote.total_voters} votes)")
     if vote is None:
         return "🤖 No votes came in, so I played it myself."
@@ -1254,8 +1260,11 @@ def build_knockout_turn_text(state: game.GameState, plays: list,
     # only while the prompt still fits.
     if not movers and plays and plays[0].why:
         lines.append(_explained(plays[0].why))
+    # Names below are plain text, not @mentions: every player here also gets
+    # a credit reply, and one notification per move is plenty (see
+    # `_credit_line`).
     for play in out[:2]:
-        lines.append(f"💥 @{play.handle} hit {play.coord} and is out. "
+        lines.append(f"💥 {play.handle} hit {play.coord} and is out. "
                      f"{_plural(state.spares_left, 'spare')} left.")
 
     # The prompt is fixed and must survive, so budget against its real length
@@ -1273,18 +1282,24 @@ def build_knockout_turn_text(state: game.GameState, plays: list,
     if scorers:
         shown, dropped = [], 0
         for play in scorers:
-            entry = f"@{play.handle} +{play.points}"
+            entry = f"{play.handle} +{play.points}"
             trial = lines + ["🏅 " + " · ".join(shown + [entry])]
             if len("\n".join(trial)) <= room:
                 shown.append(entry)
             else:
                 dropped += 1
-        if shown:
+        # The count is only known once the names are placed, so it can push
+        # a line that just fitted over the edge; give up names for it rather
+        # than losing the line.
+        while shown:
             line = "🏅 " + " · ".join(shown)
             if dropped:
                 line += f" +{dropped} more"
             if len("\n".join(lines + [line])) <= room:
                 lines.append(line)
+                break
+            shown.pop()
+            dropped += 1
 
     body = "\n".join(lines)
     while len(f"{body}\n\n{ask}") > bluesky.POST_LIMIT and len(lines) > 1:
