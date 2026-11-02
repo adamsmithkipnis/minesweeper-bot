@@ -1541,7 +1541,8 @@ def _notify_duplicate_skips(state: game.GameState, moves: list) -> None:
 
 
 _NOTICE_LIMIT = 10      # explanations per tick, so one thread can't flood
-_STALE_LOOKBACK = 4     # earlier board posts re-read for late replies
+_STALE_LOOKBACK = 4     # earlier board posts whose threads are re-read;
+                        # older ones are found through notifications
 
 
 def _send_notice(state: game.GameState, reply, text: str, kind: str) -> bool:
@@ -1608,6 +1609,11 @@ def _notify_stale_post_replies(state: game.GameState, budget: int) -> int:
     Only the newest board post is read for votes, so those replies were
     never going to count. A reply sent before its successor was posted is
     left alone: it was on the live post when it was written.
+
+    The last few stale posts have their threads re-read, as the live one
+    does. Every older post of the board is covered by one read of the bot's
+    reply notifications: on 2 November a reply landed five posts back, one
+    past the threads re-read, and got no answer at all.
     """
     boards = [p for p in db.get_posts(state.game_id)
               if p["kind"] in ("turn", "newgame")]     # newest first
@@ -1616,15 +1622,20 @@ def _notify_stale_post_replies(state: game.GameState, budget: int) -> int:
         return 0
     me, sent = bluesky.own_did(), 0
     start = uris.index(state.last_post_uri)
-    for i in range(start + 1, min(len(boards), start + 1 + _STALE_LOOKBACK)):
+    reread = start + 1 + _STALE_LOOKBACK
+    noted = bluesky.notified_replies(uris[reread:])
+    for i in range(start + 1, len(boards)):
         went_stale = _as_utc(boards[i - 1]["created_at"])
         if went_stale is None:
             continue
-        try:
-            replies = bluesky.get_replies(boards[i]["uri"])
-        except Exception:
-            logger.exception("Failed to read old post %s", boards[i]["uri"])
-            continue
+        if i >= reread:
+            replies = noted.get(uris[i], [])
+        else:
+            try:
+                replies = bluesky.get_replies(uris[i])
+            except Exception:
+                logger.exception("Failed to read old post %s", uris[i])
+                continue
         for reply in sorted(replies, key=lambda r: r.created_at or ""):
             if sent >= budget:
                 return sent

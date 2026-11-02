@@ -389,20 +389,42 @@ def _notified_replies(post_uri: str) -> list:
     """Direct replies to post_uri among the bot's recent reply notifications,
     shaped like a thread's post views. A failure here costs nothing: the
     thread is still read."""
+    return _replies_by_parent({post_uri}).get(post_uri, [])
+
+
+def notified_replies(parent_uris) -> dict:
+    """{parent uri: [votes.Reply]} for direct replies to any of parent_uris
+    among the bot's recent reply notifications.
+
+    One request however many posts are asked about, which is what lets late
+    replies to long-stale turn posts be found without re-reading each thread.
+    """
+    if _dry():
+        return {}
+    return {uri: [_as_reply(post) for post in posts]
+            for uri, posts in _replies_by_parent(set(parent_uris)).items()}
+
+
+def _replies_by_parent(parent_uris: set) -> dict:
+    """Recent reply notifications whose parent is in parent_uris, grouped by
+    parent and shaped like a thread's post views; {} if they can't be read."""
+    if not parent_uris:
+        return {}
     try:
         response = _client.app.bsky.notification.list_notifications(
             {"limit": _NOTIFICATION_LIMIT, "reasons": ["reply"]})
     except Exception:
         logger.exception("Failed to read reply notifications")
-        return []
-    found = []
+        return {}
+    found = {}
     for note in getattr(response, "notifications", None) or []:
         record = getattr(note, "record", None)
         parent = getattr(getattr(record, "reply", None), "parent", None)
-        if getattr(parent, "uri", "") != post_uri:
+        parent_uri = getattr(parent, "uri", "")
+        if parent_uri not in parent_uris:
             continue
-        found.append(SimpleNamespace(author=note.author, record=record,
-                                     uri=note.uri, cid=note.cid))
+        found.setdefault(parent_uri, []).append(SimpleNamespace(
+            author=note.author, record=record, uri=note.uri, cid=note.cid))
     return found
 
 

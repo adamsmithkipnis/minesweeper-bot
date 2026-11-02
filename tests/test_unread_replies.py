@@ -220,6 +220,18 @@ class Reading(unittest.TestCase):
                          (["E10", "E4", "Flag f4, e11"], True))
         self.assertEqual(self.asked["reasons"], ["reply"])
 
+    def test_notified_replies_are_grouped_by_the_post_they_answer(self):
+        self.notes = [notification("kifty", "D7", "1", parent="at://bot/old"),
+                      notification("andrew", "E4", "2"),
+                      notification("dire", "E10", "3", parent="at://bot/x")]
+        found = bluesky.notified_replies(["at://bot/old", TURN])
+        self.assertEqual({u: [r.text for r in rs] for u, rs in found.items()},
+                         {"at://bot/old": ["D7"], TURN: ["E4"]})
+
+    def test_notified_replies_survive_a_failed_read(self):
+        self.notes_fail = True
+        self.assertEqual(bluesky.notified_replies([TURN]), {})
+
     def test_an_empty_thread_with_replies_counted_is_short(self):
         self.count = 3
         self.assertEqual(self.texts(), ([], False))

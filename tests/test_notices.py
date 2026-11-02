@@ -71,17 +71,23 @@ class Sending(unittest.TestCase):
         db.init_db()
         self.sent = []
         self._real = (main.bluesky.post_reply, main.bluesky.get_replies,
-                      main.bluesky.own_did)
+                      main.bluesky.own_did, main.bluesky.notified_replies)
         main.bluesky.post_reply = lambda text, **kw: (
             self.sent.append((text, kw)) or f"at://bot/{len(self.sent)}")
         main.bluesky.own_did = lambda: "did:bot"
         self.replies_by_post = {}
-        main.bluesky.get_replies = lambda uri: self.replies_by_post.get(uri, [])
+        self.threads_read = []
+        main.bluesky.get_replies = lambda uri: (
+            self.threads_read.append(uri) or self.replies_by_post.get(uri, []))
+        self.notified, self.asked_notified = {}, []
+        main.bluesky.notified_replies = lambda uris: (
+            self.asked_notified.append(list(uris))
+            or {u: self.notified[u] for u in uris if u in self.notified})
 
     def tearDown(self):
         config.DB_PATH, config.POST_MODE = self._db, self._mode
         (main.bluesky.post_reply, main.bluesky.get_replies,
-         main.bluesky.own_did) = self._real
+         main.bluesky.own_did, main.bluesky.notified_replies) = self._real
 
     def state(self):
         state = game.GameState(game_id=7, rows=11, cols=11, mine_count=1,
@@ -162,6 +168,42 @@ class Sending(unittest.TestCase):
         # The bot's DID in these fixtures is "bot"; own_did reports did:bot.
         main.bluesky.own_did = lambda: "bot"
         main._notify_stale_post_replies(self.state(), 10)
+        self.assertEqual(self.sent, [])
+
+    def seed_many_posts(self, count):
+        """`count` board posts half an hour apart; the newest is live."""
+        uris = [f"at://bot/t{n}" for n in range(1, count + 1)]
+        for n, uri in enumerate(uris):
+            db.record_post(uri, "newgame" if n == 0 else "turn", game_id=7)
+            with db._connect() as conn:
+                conn.execute("UPDATE posts SET created_at = ? WHERE uri = ?",
+                             (f"2026-11-02 {n // 2:02d}:{30 * (n % 2):02d}:00",
+                              uri))
+        return uris
+
+    def test_a_late_reply_far_behind_the_live_post_is_answered(self):
+        # 2 November: "D7" went to Turn 13 while Turn 18 was live, five posts
+        # back, and nothing answered it.
+        uris = self.seed_many_posts(8)          # t8 is live, t3 is five back
+        state = self.state()
+        state.last_post_uri = uris[-1]
+        late = reply("kifty", "D7", "2026-11-02T03:40:00+00:00")
+        self.notified[uris[2]] = [late]
+        main._notify_stale_post_replies(state, 10)
+        main._notify_stale_post_replies(state, 10)
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(self.sent[0][1]["parent_uri"], late.uri)
+        # The four nearest stale posts are re-read; the rest are not.
+        self.assertEqual(set(self.threads_read), set(uris[3:7]))
+        self.assertEqual(set(self.asked_notified[0]), set(uris[:3]))
+
+    def test_a_far_reply_made_while_its_post_was_live_is_left_alone(self):
+        uris = self.seed_many_posts(8)
+        state = self.state()
+        state.last_post_uri = uris[-1]
+        # t1 was live from 00:00 until t2 went up at 00:30.
+        self.notified[uris[0]] = [reply("a", "J3", "2026-11-02T00:20:00+00:00")]
+        main._notify_stale_post_replies(state, 10)
         self.assertEqual(self.sent, [])
 
     def test_the_live_post_is_never_called_stale(self):
