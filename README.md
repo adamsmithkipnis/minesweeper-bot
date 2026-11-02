@@ -156,7 +156,7 @@ Players are @-tagged when a post names them: the turn post that credits a
 move, milestones, the standings. That is on purpose even though a move also
 gets a credit reply, because the mention's notification opens the *new*
 board and regulars use it to jump straight to the next turn. Anyone who
-finds two notifications a move too many replies `no tags` (or `untag me`,
+finds two notifications a move too many replies `no tags` (or `untag`, `untag me`,
 `don't tag me`, `stop tagging me`) under the current board. They are still
 named, just without the `@`, so there is no notification. `tag me` turns it
 back on. A turn post that tags anybody ends with a one-line note saying
