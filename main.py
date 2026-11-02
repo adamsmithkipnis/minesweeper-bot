@@ -566,6 +566,14 @@ def build_stale_post_reply() -> str:
         tags=[config.REPLY_HASHTAG])
 
 
+def build_ended_board_reply(state: game.GameState) -> str:
+    """Say that a reply went to a board that has already finished."""
+    return _with_tags(
+        f"🏁 That board has ended, so this didn't count. Board "
+        f"{state.game_id} is live now: reply to its newest post to play.",
+        tags=[config.REPLY_HASHTAG])
+
+
 def build_welcome_line() -> str:
     """The extra line a player's first-ever move reply carries.
 
@@ -1696,7 +1704,9 @@ def _notify_stale_post_replies(state: game.GameState, budget: int) -> int:
     me, sent = bluesky.own_did(), 0
     start = uris.index(state.last_post_uri)
     reread = start + 1 + _STALE_LOOKBACK
-    noted = bluesky.notified_replies(uris[reread:])
+    ended = _ended_board_posts(state)
+    noted = bluesky.notified_replies(
+        uris[reread:] + [p["uri"] for p, _ in ended])
     for i in range(start + 1, len(boards)):
         went_stale = _as_utc(boards[i - 1]["created_at"])
         if went_stale is None:
@@ -1719,7 +1729,49 @@ def _notify_stale_post_replies(state: game.GameState, budget: int) -> int:
                 continue
             if _send_notice(state, reply, build_stale_post_reply(), "stalepost"):
                 sent += 1
+
+    for post, went_stale in ended:
+        for reply in sorted(noted.get(post["uri"], []),
+                            key=lambda r: r.created_at or ""):
+            if sent >= budget:
+                return sent
+            when = _as_utc(reply.created_at)
+            if (reply.did == me or when is None or when <= went_stale
+                    or not votes.is_actionable(reply.text, _ENDED_SIZE,
+                                               _ENDED_SIZE)):
+                continue
+            if _send_notice(state, reply, build_ended_board_reply(state),
+                            "endedboard"):
+                sent += 1
     return sent
+
+
+_ENDED_LOOKBACK = 3     # finished boards whose posts are still answered
+_ENDED_SIZE = 26        # the biggest board; an old board's size isn't kept
+
+
+def _ended_board_posts(state: game.GameState) -> list:
+    """[(post, went_stale)] for the board posts of the last few finished
+    boards, newest first.
+
+    Only the current board's posts were ever checked for late replies, so on
+    2 November an E1 and a J10 sent to Board 105's Turn 14, hours after that
+    board ended, got no answer. A post went stale when the next post of its
+    board went up; the board's last post, its game-over post, was never live
+    for moves at all.
+    """
+    found = []
+    for game_id in range(state.game_id - 1,
+                         max(0, state.game_id - 1 - _ENDED_LOOKBACK), -1):
+        posts = [p for p in db.get_posts(game_id)
+                 if p["kind"] in ("turn", "newgame", "gameover")]
+        newer = None
+        for post in posts:                              # newest first
+            went_stale = _as_utc((newer or post)["created_at"])
+            if went_stale is not None:
+                found.append((post, went_stale))
+            newer = post
+    return found
 
 
 def _explain_uncounted_replies(state: game.GameState, replies: list,

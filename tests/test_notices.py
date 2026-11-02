@@ -206,6 +206,69 @@ class Sending(unittest.TestCase):
         main._notify_stale_post_replies(state, 10)
         self.assertEqual(self.sent, [])
 
+    def seed_ended_board(self):
+        """Board 6 ran 08:00-09:30 and ended; board 7 (seed_posts) is live."""
+        for uri, kind, when in (("at://bot/b6t1", "newgame", "08:00:00"),
+                                ("at://bot/b6t2", "turn", "08:30:00"),
+                                ("at://bot/b6t3", "turn", "09:00:00"),
+                                ("at://bot/b6end", "gameover", "09:30:00")):
+            db.record_post(uri, kind, game_id=6)
+            with db._connect() as conn:
+                conn.execute("UPDATE posts SET created_at = ? WHERE uri = ?",
+                             (f"2026-10-15 {when}", uri))
+        self.seed_posts()
+
+    def test_a_reply_to_a_finished_board_is_answered_once(self):
+        # 2 November: E1 and J10 went to Board 105's Turn 14, hours after
+        # Board 105 ended, and nothing answered either.
+        self.seed_ended_board()
+        late = [reply("perplexed", "E1", "2026-10-15T10:33:00+00:00"),
+                reply("mariewest", "J10", "2026-10-15T11:39:00+00:00")]
+        self.notified["at://bot/b6t2"] = late
+        main._notify_stale_post_replies(self.state(), 10)
+        main._notify_stale_post_replies(self.state(), 10)
+        self.assertEqual([kw["parent_uri"] for _, kw in self.sent],
+                         [r.uri for r in late])
+        for text, _ in self.sent:
+            self.assertIn("That board has ended", text)
+            self.assertIn("Board 7 is live", text)
+            self.assertLessEqual(len(text.encode()), 300)
+
+    def test_its_old_posts_come_from_the_one_notification_read(self):
+        self.seed_ended_board()
+        main._notify_stale_post_replies(self.state(), 10)
+        self.assertEqual(len(self.asked_notified), 1)
+        self.assertTrue({"at://bot/b6t1", "at://bot/b6t3", "at://bot/b6end"}
+                        <= set(self.asked_notified[0]))
+        self.assertFalse(any(u.startswith("at://bot/b6")
+                             for u in self.threads_read))
+
+    def test_a_reply_made_while_the_old_board_was_live_is_left_alone(self):
+        self.seed_ended_board()
+        # b6t2 was live until b6t3 at 09:00; b6t3 until the board ended.
+        self.notified["at://bot/b6t2"] = [
+            reply("a", "E1", "2026-10-15T08:45:00+00:00")]
+        self.notified["at://bot/b6t3"] = [
+            reply("b", "J10", "2026-10-15T09:20:00+00:00")]
+        main._notify_stale_post_replies(self.state(), 10)
+        self.assertEqual(self.sent, [])
+
+    def test_any_move_on_the_game_over_post_is_answered(self):
+        self.seed_ended_board()
+        self.notified["at://bot/b6end"] = [
+            reply("a", "flag Q20", "2026-10-15T09:31:00+00:00"),  # a big board
+            reply("b", "gg everyone", "2026-10-15T09:32:00+00:00")]
+        main._notify_stale_post_replies(self.state(), 10)
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn("That board has ended", self.sent[0][0])
+
+    def test_boards_past_the_lookback_are_not_asked_about(self):
+        db.record_post("at://bot/ancient", "turn",
+                       game_id=7 - 1 - main._ENDED_LOOKBACK)
+        self.seed_posts()
+        main._notify_stale_post_replies(self.state(), 10)
+        self.assertNotIn("at://bot/ancient", self.asked_notified[0])
+
     def test_the_live_post_is_never_called_stale(self):
         self.seed_posts()
         self.replies_by_post["at://bot/turn3"] = [
