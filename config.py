@@ -104,10 +104,10 @@ MASSIVE_MINE_BUDGET = int(os.environ.get("MASSIVE_MINE_BUDGET", "5"))
 # The most one move can score on the big board; 0 lifts it. A big board at
 # 13-16% leaves wide blank regions, so one click can cascade across most of
 # it: simulated at six players, a single move on the 26x26 opened 374 of 588
-# cells, and the top tenth of moves took 71% of the board's points (41% on
-# the 11x11). A cap of 20 brings that down to luck-sized jackpots and the
-# 26x26 from 2.8 to 1.7 points a move, in line with a regular day's ~2.3.
-MASSIVE_MOVE_CAP = int(os.environ.get("MASSIVE_MOVE_CAP", "20"))
+# cells. The big board pays the top tier's 3x a cell, and a cap of 30 (ten
+# cells) leaves the top tenth of moves with 42-43% of the board's points,
+# the 11x11's share, while biting on only 3-4% of moves.
+MASSIVE_MOVE_CAP = int(os.environ.get("MASSIVE_MOVE_CAP", "30"))
 # No big board before this local date (YYYY-MM-DD; empty for no limit). It
 # shipped on Sun Oct 25, 2026, and without this the next morning — the
 # fourth Monday — would have opened a surprise 26x26 instead of the planned
