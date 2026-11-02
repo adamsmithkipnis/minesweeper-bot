@@ -159,7 +159,11 @@ board and regulars use it to jump straight to the next turn. Anyone who
 finds two notifications a move too many replies `no tags` (or `untag me`,
 `don't tag me`, `stop tagging me`) under the current board. They are still
 named, just without the `@`, so there is no notification. `tag me` turns it
-back on. Each request gets one confirming reply, and the preference
+back on. A turn post that tags anybody ends with a one-line note saying
+both — that tags take you to the new board, and that `no tags` stops them —
+so a new player finds the setting where the tag lands; it is the first
+thing dropped when the board news needs the room. Each request gets one
+confirming reply, and the preference
 survives a reset. It is applied in `bluesky.py`, which every post passes
 through, so no post can forget it.
 

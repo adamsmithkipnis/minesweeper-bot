@@ -218,6 +218,24 @@ def _explained(why: str) -> str:
     return f"🧠 {why}"
 
 
+# How a new player learns that tags can be turned off, and why they might not
+# want to: the mention's notification is the quickest way to the next turn.
+TAG_NOTE = '🔔 Tags take you to the new board · "no tags" stops them'
+
+
+def _tag_note(body: str, people) -> str:
+    """The tag note, if this post really tags somebody, else ''.
+
+    `people` is (handle, did) for everyone the post might name. Somebody who
+    opted out is shown without the "@" at posting time, so a post naming
+    only them tags nobody and the note would be telling them something false.
+    """
+    for handle, did in people:
+        if handle and bluesky.is_tagged(did) and f"@{handle}" in body:
+            return TAG_NOTE
+    return ""
+
+
 def build_turn_text(state: game.GameState, coord: str, vote, source: str,
                     flags=(), why: str = "") -> str:
     """The board post for a voting turn. `why` is the bot's deduction when it
@@ -229,6 +247,11 @@ def build_turn_text(state: game.GameState, coord: str, vote, source: str,
         with_why = lines + [_explained(why)]
         if len("\n".join(with_why) + f"\n\n{ask}") <= bluesky.POST_LIMIT:
             lines = with_why
+    caller = vote.caller if (vote is not None and source == "crowd") else None
+    note = _tag_note("\n".join(lines),
+                     [(caller.handle, caller.did)] if caller else [])
+    if note and len("\n".join(lines + [note]) + f"\n\n{ask}") <= bluesky.POST_LIMIT:
+        lines.append(note)
     return _with_tags("\n".join(lines) + f"\n\n{ask}")
 
 
@@ -1323,6 +1346,10 @@ def build_knockout_turn_text(state: game.GameState, plays: list,
     while len(f"{body}\n\n{ask}") > bluesky.POST_LIMIT and len(lines) > 1:
         lines.pop()
         body = "\n".join(lines)
+    # Last, so it only ever takes room the board news left over.
+    note = _tag_note(body, [(p.handle, p.did) for p in plays])
+    if note and len(f"{body}\n{note}\n\n{ask}") <= bluesky.POST_LIMIT:
+        body = f"{body}\n{note}"
     return _with_tags(f"{body}\n\n{ask}")
 
 

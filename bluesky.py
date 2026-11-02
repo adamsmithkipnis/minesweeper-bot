@@ -118,6 +118,11 @@ def set_untagged(dids) -> None:
     _untagged = set(dids)
 
 
+def is_tagged(did: str) -> bool:
+    """Whether a mention of this player will notify them."""
+    return bool(did) and did not in _untagged
+
+
 def untag(text: str, extra_dids: dict | None = None) -> str:
     """Drop the "@" from every mention of a player who opted out.
 

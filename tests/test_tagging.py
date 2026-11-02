@@ -8,8 +8,8 @@ which means no facet and no notification.
 """
 
 import os
+import random
 import tempfile
-import types
 import unittest
 
 from helpers import config, db, game, main, votes
@@ -88,6 +88,69 @@ class Untagging(unittest.TestCase):
                 self.assertNotIn("mention did:coil", written, name)
         finally:
             config.POST_MODE, config.DRY_DIR = saved
+
+
+class TheNoteInTaggingPosts(unittest.TestCase):
+    """A post that tags somebody says how to turn tags off, and why not to."""
+
+    def setUp(self):
+        self._saved = set(bluesky._untagged), config.KNOCKOUT
+        bluesky.set_untagged(())
+        # Seeded: on some boards the news leaves no room, and the note is
+        # rightly the thing that goes.
+        self.state = game.new_game(1, rng=random.Random(5), mine_budget=2)
+        self.state.turn_number = 7
+
+    def tearDown(self):
+        untagged, config.KNOCKOUT = self._saved
+        bluesky.set_untagged(untagged)
+
+    def plays(self, *who, handle="{}.bsky.social"):
+        return [main.Play(f"did:{w}", handle.format(w), "D4", game.SAFE, 5)
+                for w in who]
+
+    def vote(self, did="did:coil", handle="coil.bsky.social"):
+        caller = votes.Reply(did=did, handle=handle, text="D4")
+        return votes.VoteResult("D4", 2, 3, caller)
+
+    def test_a_knockout_post_that_tags_carries_it(self):
+        config.KNOCKOUT = True
+        text = main.build_knockout_turn_text(self.state, self.plays("coil"))
+        self.assertIn(main.TAG_NOTE, text)
+        self.assertIn('"no tags"', text)
+        self.assertLessEqual(len(text), 300)
+
+    def test_a_voting_post_that_tags_carries_it(self):
+        config.KNOCKOUT = False
+        text = main.build_turn_text(self.state, "D4", self.vote(), "crowd")
+        self.assertIn(main.TAG_NOTE, text)
+        self.assertLessEqual(len(text), 300)
+
+    def test_a_post_that_tags_nobody_leaves_it_out(self):
+        config.KNOCKOUT = False
+        self.assertNotIn(main.TAG_NOTE,
+                         main.build_turn_text(self.state, "D4", None, "bot"))
+        bluesky.set_untagged({"did:coil"})
+        self.assertNotIn(main.TAG_NOTE, main.build_turn_text(
+            self.state, "D4", self.vote(), "crowd"))
+        config.KNOCKOUT = True
+        self.assertNotIn(main.TAG_NOTE, main.build_knockout_turn_text(
+            self.state, self.plays("coil")))
+
+    def test_one_tagged_player_is_enough(self):
+        config.KNOCKOUT = True
+        bluesky.set_untagged({"did:coil"})
+        text = main.build_knockout_turn_text(
+            self.state, self.plays("coil", "mehtis"))
+        self.assertIn(main.TAG_NOTE, text)
+
+    def test_names_win_over_the_note_on_a_crowded_turn(self):
+        config.KNOCKOUT = True
+        crowded = self.plays(*[f"averylongplayerhandle{i}" for i in range(8)])
+        text = main.build_knockout_turn_text(self.state, crowded)
+        self.assertLessEqual(len(text), 300)
+        self.assertIn("🏅", text)
+        self.assertIn("min.", text)
 
 
 class Storing(unittest.TestCase):
