@@ -32,6 +32,12 @@ _dry_counter = 0
 # and the short form the post copy uses.
 _did_by_name = {}
 
+# Players who replied "no tags". Their names still appear in posts, but as
+# plain text without the "@", so no mention facet is built and no
+# notification goes out. Loaded from the database by `main` each tick; kept
+# here because this is the one place every post passes through.
+_untagged = set()
+
 # The CID of every post this process made, by URI. A reply needs its
 # parent's CID as well as its URI, and the posting functions return only the
 # URI, which every caller already stores; this is how the bot can thread a
@@ -99,6 +105,38 @@ def _byte_len(text: str) -> int:
     return len(text.encode("utf-8"))
 
 
+def _lookup(extra_dids: dict | None) -> dict:
+    lookup = dict(_did_by_name)
+    for handle, did in (extra_dids or {}).items():
+        lookup[handle.lstrip("@").lower()] = did
+    return lookup
+
+
+def set_untagged(dids) -> None:
+    """Replace the set of players who asked not to be @mentioned."""
+    global _untagged
+    _untagged = set(dids)
+
+
+def is_tagged(did: str) -> bool:
+    """Whether a mention of this player will notify them."""
+    return bool(did) and did not in _untagged
+
+
+def untag(text: str, extra_dids: dict | None = None) -> str:
+    """Drop the "@" from every mention of a player who opted out.
+
+    Done before clamping, and it only ever shortens the text, so a post the
+    builders budgeted to fit still fits.
+    """
+    if not _untagged:
+        return text
+    lookup = _lookup(extra_dids)
+    return _MENTION_RE.sub(
+        lambda m: (m.group(1) if lookup.get(m.group(1).lower()) in _untagged
+                   else m.group(0)), text)
+
+
 def facet_ranges(text: str, extra_dids: dict | None = None) -> list:
     """(kind, value, byte_start, byte_end) for every mention and tag.
 
@@ -109,10 +147,7 @@ def facet_ranges(text: str, extra_dids: dict | None = None) -> list:
     Split out from `build_facets` so the offsets can be asserted in a test and
     printed by the dry run without constructing atproto models.
     """
-    lookup = dict(_did_by_name)
-    for handle, did in (extra_dids or {}).items():
-        lookup[handle.lstrip("@").lower()] = did
-
+    lookup = _lookup(extra_dids)
     out = []
     for match in _MENTION_RE.finditer(text):
         did = lookup.get(match.group(1).lower())
@@ -183,7 +218,7 @@ def _write_dry(text: str, kind: str, image: bytes = b"", alt: str = "",
 def post_with_image(text: str, image: bytes, alt: str = "", kind: str = "post",
                     extra_dids: dict | None = None) -> str:
     """Post text plus the board image; return the AT URI."""
-    text = clamp(text)
+    text = clamp(untag(text, extra_dids))
     alt = clamp(alt or "Minesweeper board.", ALT_LIMIT)
     if _dry():
         return _remember_cid(_write_dry(text, kind, image, alt, extra_dids))
@@ -194,7 +229,7 @@ def post_with_image(text: str, image: bytes, alt: str = "", kind: str = "post",
 
 
 def post_text(text: str, kind: str = "post", extra_dids: dict | None = None) -> str:
-    text = clamp(text)
+    text = clamp(untag(text, extra_dids))
     if _dry():
         return _remember_cid(_write_dry(text, kind, extra_dids=extra_dids))
     return _remember_cid(_send_or_adopt(text, lambda: _client.send_post(
@@ -219,7 +254,7 @@ def post_reply(text: str, parent_uri: str, parent_cid: str,
                root_uri: str = "", root_cid: str = "",
                kind: str = "credit", extra_dids: dict | None = None) -> str:
     """Reply to a follower's post — this is what notifies them."""
-    text = clamp(text)
+    text = clamp(untag(text, extra_dids))
     if _dry():
         return _write_dry(text, kind, extra_dids=extra_dids)
 

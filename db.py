@@ -146,6 +146,13 @@ CREATE TABLE IF NOT EXISTS check_tutorials (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Players who replied "no tags": named in posts without an @mention. A
+-- preference about the person, not the game, so reset_all leaves it alone.
+CREATE TABLE IF NOT EXISTS untagged (
+    did TEXT PRIMARY KEY,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Knocked-out players, per board. A mine takes the player who opened it out
 -- of that board rather than ending it for everyone; they can still flag.
 CREATE TABLE IF NOT EXISTS eliminations (
@@ -869,6 +876,26 @@ def release_flag_tutorial(did: str) -> None:
         return
     with _connect() as conn:
         conn.execute("DELETE FROM flag_tutorials WHERE did = ?", (did,))
+
+def set_tagging(did: str, tagged: bool) -> bool:
+    """Record a player's mention preference. True if it changed."""
+    if not did:
+        return False
+    with _connect() as conn:
+        if tagged:
+            cur = conn.execute("DELETE FROM untagged WHERE did = ?", (did,))
+        else:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO untagged (did) VALUES (?)", (did,))
+        return cur.rowcount == 1
+
+
+def untagged_dids() -> set:
+    """Everyone who has asked not to be @mentioned."""
+    with _connect() as conn:
+        return {r["did"] for r in
+                conn.execute("SELECT did FROM untagged").fetchall()}
+
 
 def record_followers(followers: int, follows: int | None = None,
                      posts: int | None = None) -> None:

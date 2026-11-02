@@ -527,6 +527,28 @@ def unplayable_votes(replies: list, unavailable: set, rows: int,
     return [pair for did, pair in dead.items() if did not in alive]
 
 
+# "no tags" opts a player out of being @mentioned in the bot's posts; "tag me"
+# opts them back in. Checked in that order, since "don't tag me" contains
+# "tag me". Whole phrases only: "tag" alone turns up in ordinary chat.
+_TAG_OFF = re.compile(
+    r"\b(?:no\s*tags?|tags?\s+off|untag\s+me|stop\s+tagging(?:\s+me)?|"
+    r"(?:don'?t|do\s+not)\s+tag\s+me|no\s+(?:@\s*)?mentions?)\b",
+    re.IGNORECASE)
+_TAG_ON = re.compile(
+    r"\b(?:tag\s+me|tags?\s+on|start\s+tagging(?:\s+me)?)\b",
+    re.IGNORECASE)
+
+
+def parse_tag_pref(text: str) -> bool | None:
+    """False for "no tags", True for "tag me", None for anything else."""
+    text = text or ""
+    if _TAG_OFF.search(text):
+        return False
+    if _TAG_ON.search(text):
+        return True
+    return None
+
+
 def is_actionable(text: str, rows: int, cols: int) -> bool:
     """Whether a reply tried to vote or flag, as opposed to just chatting."""
     if parse_vote(text, rows, cols) is not None:

@@ -11,11 +11,9 @@ import copy
 import os
 import random
 import tempfile
-import types
 import unittest
 
 from helpers import config, db, game, main, solver, votes
-import bluesky  # noqa: E402
 
 try:
     import renderer
@@ -341,8 +339,7 @@ class Copy(unittest.TestCase):
                  main.Play("did:b", "bob.bsky.social", "D4", game.SAFE, 5)]
         text = main.build_knockout_turn_text(state, plays)
         self.assertIn("hit C3 and is out", text)
-        self.assertIn("bob.bsky.social +5", text)
-        self.assertNotIn("@", text)
+        self.assertIn("@bob.bsky.social +5", text)
         self.assertLessEqual(len(text), 300)
 
     def test_a_turn_post_stays_within_the_limit_when_crowded(self):
@@ -541,7 +538,7 @@ class EveryMoverIsAcknowledged(unittest.TestCase):
     def test_all_scorers_are_named_when_they_fit(self):
         text = main.build_knockout_turn_text(self.state, self.plays(3))
         for i in range(3):
-            self.assertIn(f"player{i}.bsky.social", text)
+            self.assertIn(f"@player{i}.bsky.social", text)
 
     def test_a_crowded_turn_counts_the_ones_it_cannot_fit(self):
         text = main.build_knockout_turn_text(
@@ -549,7 +546,7 @@ class EveryMoverIsAcknowledged(unittest.TestCase):
             self.plays(8, handle="averylongplayerhandle{}.bsky.social"))
         self.assertLessEqual(len(text), 300)
         self.assertIn("more", text)
-        self.assertIn("averylongplayerhandle0.bsky.social", text,
+        self.assertIn("@averylongplayerhandle0.bsky.social", text,
                       "the best scorer must survive the trim")
 
     def test_the_prompt_always_survives(self):
@@ -736,28 +733,6 @@ class QuietTurnsTeach(unittest.TestCase):
         self.assertLessEqual(len(text), 300)
         crowd = main.build_turn_text(self.state, "D4", None, "crowd", why=why)
         self.assertNotIn("🧠", crowd)
-
-
-class TurnPostsDoNotMention(unittest.TestCase):
-    """A player who moves is answered under their own post, so the turn post
-    names them without an @mention — two notifications per move was spam."""
-
-    def test_the_voting_credit_line_is_plain_text(self):
-        vote = types.SimpleNamespace(caller_handle="coil.bsky.social",
-                                     votes=2, total_voters=3)
-        line = main._credit_line(vote, "crowd")
-        self.assertIn("coil.bsky.social called it", line)
-        self.assertEqual(bluesky.facet_ranges(
-            line, {"coil.bsky.social": "did:coil"}), [])
-
-    def test_the_knockout_post_links_nobody(self):
-        state = game.new_game(1, rng=random.Random(5), mine_budget=2)
-        plays = [main.Play("did:a", "alice.bsky.social", "C3", game.MINE),
-                 main.Play("did:b", "bob.bsky.social", "D4", game.SAFE, 5)]
-        text = main.build_knockout_turn_text(state, plays)
-        dids = {"alice.bsky.social": "did:a", "bob.bsky.social": "did:b"}
-        self.assertEqual([f for f in bluesky.facet_ranges(text, dids)
-                          if f[0] == "mention"], [])
 
 
 class FlagsOnSpentMines(unittest.TestCase):
