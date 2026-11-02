@@ -243,7 +243,8 @@ def build_opening_text(state: game.GameState, record: dict) -> str:
     tier = tier_of(state)
     if is_massive(state):
         banner = (f"💣💣 {massive_name().upper()} · "
-                  f"{state.rows}x{state.cols}, {state.mine_count} mines.")
+                  f"{state.rows}x{state.cols}, {state.mine_count} mines, "
+                  f"{tier_multiplier(state)}x points.")
     else:
         banner = (f"💣 NEW BOARD — Tier {tier + 1} · "
                   f"{state.rows}x{state.cols}, {state.mine_count} mines"
@@ -988,13 +989,16 @@ def tier_multiplier(state: game.GameState | None) -> int:
     spread over MORE turns, because harder boards run longer, instead of
     being concentrated into fewer.
 
-    The big board pays 1x. It is less dense than the 11x11 (13-16% against
-    20%), so each cell is safer, not riskier, and the volume is already the
-    reward: at 3x a 22x22 would hand out about 1,200 points in a day, ten
-    regular boards' worth, and swamp the weekly table and the milestones.
+    The big board pays the top tier's rate. Players reach it straight off
+    the 11x11, and at 1x a safe click that had been worth 3 was suddenly
+    worth 1, which read as a punishment for turning up. What keeps the day
+    from swamping the weekly table is MASSIVE_MOVE_CAP, not the rate:
+    simulated at six players, 3x with a cap of 30 pays 3.7-4.3 points a move
+    against the 11x11's 3.4, and the top tenth of moves takes 42-43% of the
+    points, the same share as on the 11x11.
     """
     if is_massive(state):
-        return 1
+        return len(config.TIERS)
     return tier_of(state) + 1
 
 

@@ -136,19 +136,21 @@ class WhatItIs(_Config):
         big = self.board(14, 14, 31)
         self.assertEqual(main.tier_of(big), 2)
 
-    def test_it_pays_one_point_a_cell(self):
-        """At 3x a 22x22 is ten regular boards' worth of points in a day,
-        which would swamp the weekly table every Monday."""
+    def test_it_pays_the_top_tiers_rate(self):
+        """Players arrive from the 11x11 at 3x; at 1x the first big board read
+        as a cut ("Only one point? Did I miss a rule change?"). The cap, not
+        the rate, is what keeps the day from swamping the weekly table."""
         for rows, cols, mines in config.MASSIVE_BOARDS:
             self.assertEqual(main.tier_multiplier(
-                self.board(rows, cols, mines)), 1, f"{rows}x{cols}")
-        self.assertEqual(main.tier_multiplier(self.board(11, 11, 24)), 3)
+                self.board(rows, cols, mines)), 3, f"{rows}x{cols}")
+        self.assertEqual(main.tier_multiplier(self.board(9, 9, 13, budget=1)), 1)
 
-    def test_the_opening_post_promises_no_multiplier(self):
+    def test_the_opening_post_says_what_a_cell_pays(self):
         text = main.build_opening_text(self.board(22, 22, 77),
                                        {"played": 0, "cleared": 0,
                                         "exploded": 0})
-        self.assertNotIn("x points", text)
+        self.assertIn("3x points", text)
+        self.assertLessEqual(len(text), 300)
 
     def test_the_ladder_resumes_where_it_was(self):
         db.set_setting("massive_resume_tier", "1")
@@ -165,13 +167,13 @@ class WhatItIs(_Config):
 
 class OneMoveIsCapped(_Config):
     """On a 26x26 at 13% one click once opened 374 of 588 cells in the
-    simulator, and the top tenth of moves took 71% of the points. The cap
-    keeps the day's standings about play rather than one lucky cascade."""
+    simulator. The cap keeps the day's standings about play rather than one
+    lucky cascade."""
 
     def setUp(self):
         super().setUp()
         self._cap = config.MASSIVE_MOVE_CAP
-        config.MASSIVE_MOVE_CAP = 20
+        config.MASSIVE_MOVE_CAP = 30
 
     def tearDown(self):
         config.MASSIVE_MOVE_CAP = self._cap
@@ -179,9 +181,9 @@ class OneMoveIsCapped(_Config):
 
     def test_a_big_cascade_scores_the_cap(self):
         big = self.board(26, 26, 88)
-        self.assertEqual(main.move_points(big, 374), 20)
-        self.assertEqual(main.move_points(big, 5), 5)
-        self.assertEqual(main.move_points(big, 20), 20)
+        self.assertEqual(main.move_points(big, 374), 30)
+        self.assertEqual(main.move_points(big, 5), 15)
+        self.assertEqual(main.move_points(big, 10), 30)
 
     def test_regular_boards_are_not_capped(self):
         self.assertEqual(main.move_points(self.board(11, 11, 24, budget=3),
@@ -189,7 +191,7 @@ class OneMoveIsCapped(_Config):
 
     def test_zero_lifts_it(self):
         config.MASSIVE_MOVE_CAP = 0
-        self.assertEqual(main.move_points(self.board(26, 26, 88), 374), 374)
+        self.assertEqual(main.move_points(self.board(26, 26, 88), 374), 1122)
 
     def test_a_live_turn_pays_the_cap(self):
         state = self.board(26, 26, 88)
@@ -199,7 +201,7 @@ class OneMoveIsCapped(_Config):
         for row, col in sorted(set(position.hidden()) - state.mine_cells):
             trial = copy.deepcopy(state)
             game.reveal(trial, row, col)
-            if len(trial.revealed) - len(state.revealed) > 20:
+            if len(trial.revealed) - len(state.revealed) > 10:
                 break
         else:
             self.fail("seed produced no cascade over the cap")
@@ -209,15 +211,15 @@ class OneMoveIsCapped(_Config):
                             uri="at://a/x", cid="c", created_at="1")
         plays, *_ = main.apply_knockout_moves(state, [reply], already,
                                               position, analysis)
-        self.assertEqual([p.points for p in plays], [20])
+        self.assertEqual([p.points for p in plays], [30])
 
     def test_the_reply_says_it_hit_the_cap(self):
         state = self.board(26, 26, 88)
         coord = game.index_to_coord(*sorted(state.revealed)[0])
-        play = main.Play("did:a", "a.bsky.social", coord, game.SAFE, 20)
+        play = main.Play("did:a", "a.bsky.social", coord, game.SAFE, 30)
         text = main.build_knockout_credit_reply(state, play, 40, 900,
                                                 first_move=True)
-        self.assertIn("+20 points, the most one move scores", text)
+        self.assertIn("+30 points, the most one move scores", text)
         self.assertLessEqual(len(text), 300)
         play.points = 7
         self.assertNotIn("the most one move", main.build_knockout_credit_reply(
