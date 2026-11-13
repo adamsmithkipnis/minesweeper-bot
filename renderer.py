@@ -309,6 +309,16 @@ _HEADROOM = {CHRISTMAS: 0.22, EASTER: 0.16, NEW_YEAR: 0.26,
              ST_PATRICKS: 0.26, BIRTHDAY: 0.24, THANKSGIVING: 0.22}
 
 
+def _mask_hole(w):
+    """Radius of a goalie-mask hole on a face `w` wide; never under 2px,
+    below which a filled circle renders as a plus sign."""
+    return max(2, w * 0.055)
+
+
+def _dot(draw, cx, cy, r, fill=TEXT):
+    draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=fill)
+
+
 def _heart(draw, cx, cy, s, fill):
     """A heart `2s` wide, centred on (cx, cy)."""
     draw.ellipse((cx - s, cy - s * 0.8, cx, cy + s * 0.2), fill=fill)
@@ -394,14 +404,14 @@ def _smiley(draw, box, mood, theme=None):
                      start=90 if inner < 0.5 else 270,
                      end=270 if inner < 0.5 else 90, fill=PUMPKIN_RIB, width=1)
     elif theme == FRIDAY_13TH:
-        # Breathing holes and the red chevrons of a goalie mask.
-        for px, py in ((0.20, 0.55), (0.80, 0.55), (0.27, 0.66), (0.73, 0.66)):
-            draw.ellipse((fx0 + w * px - 1.2, fy0 + h * py - 1.2,
-                          fx0 + w * px + 1.2, fy0 + h * py + 1.2), fill=TEXT)
+        # The red chevrons of a goalie mask, one over each eye, pointing
+        # down. Sized to the face: in the game it is about 36px across, where
+        # smaller marks smudged together, and cheek holes read as more eyes.
         for side in (-1, 1):
-            draw.polygon([(cx + side * w * 0.06, fy0 + h * 0.07),
-                          (cx + side * w * 0.15, fy0 + h * 0.13),
-                          (cx + side * w * 0.06, fy0 + h * 0.19)], fill=SANTA_RED)
+            ex = cx + side * w * 0.14
+            draw.polygon([(ex - w * 0.08, fy0 + h * 0.12),
+                          (ex + w * 0.08, fy0 + h * 0.12),
+                          (ex, fy0 + h * 0.24)], fill=SANTA_RED)
     elif theme == VALENTINES:
         for bx in (0.24, 0.76):
             draw.ellipse((fx0 + w * (bx - 0.09), fy0 + h * 0.52,
@@ -481,11 +491,12 @@ def _smiley(draw, box, mood, theme=None):
         draw.line((fx0 + w * 0.60, fy0 + h * 0.80, fx0 + w * 0.67, fy0 + h * 0.84),
                   fill=TEXT, width=3)
     elif theme == FRIDAY_13TH and mood != "cool":
-        # No mouth on the mask, only rows of holes where one would be.
-        for row, cols in ((0.66, (0.40, 0.50, 0.60)), (0.76, (0.45, 0.55))):
-            for px in cols:
-                draw.ellipse((fx0 + w * px - 1.5, fy0 + h * row - 1.5,
-                              fx0 + w * px + 1.5, fy0 + h * row + 1.5), fill=TEXT)
+        # No mouth on the mask, only a block of holes where one would be,
+        # spaced so they stay separate dots at game size.
+        hole = _mask_hole(w)
+        for row in (0.61, 0.82):
+            for px in (0.40, 0.60):
+                _dot(draw, fx0 + w * px, fy0 + h * row, hole)
     else:
         draw.arc((fx0 + w * 0.24, fy0 + h * 0.38,
                   fx1 - w * 0.24, fy0 + h * 0.86), start=20, end=160,
