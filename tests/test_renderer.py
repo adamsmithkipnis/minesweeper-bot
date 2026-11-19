@@ -129,6 +129,28 @@ class Image(unittest.TestCase):
         state = game.new_game(1, rng=random.Random(7))
         self.assertTrue(renderer.render_board(state, highlight="Z99"))
         self.assertTrue(renderer.render_board(state, highlight=""))
+        self.assertTrue(renderer.render_board(state, highlight=["Z99", ""]))
+
+    def test_every_cell_played_last_turn_is_ringed(self):
+        """A knockout turn opens one cell per player; each gets the ring,
+        not just whichever was played last."""
+        from PIL import Image as PILImage
+        import io
+
+        def blue(highlight):
+            png = renderer.render_board(state, highlight=highlight,
+                                        day=date(2026, 6, 2))
+            img = PILImage.open(io.BytesIO(png)).convert("RGB")
+            return list(img.getdata()).count((0, 0, 255))
+
+        state = game.new_game(1, rng=random.Random(7))
+        opened = [game.index_to_coord(*cell) for cell in sorted(state.revealed)]
+        three = opened[:3]
+        none, one = blue(()), blue(three[0])
+        ring = one - none
+        self.assertGreater(ring, 0)
+        self.assertEqual(blue(three) - none, 3 * ring)
+        self.assertEqual(blue(three[0]), blue([three[0]]))
 
 
 @unittest.skipUnless(HAS_PILLOW, "Pillow not installed (use .venv/bin/python)")

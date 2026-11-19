@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS game_state (
     mine_budget INTEGER DEFAULT 0,
     detonations INTEGER DEFAULT 0,
     spent_mines TEXT,
+    last_coords TEXT,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -249,6 +250,7 @@ _ADDED_COLUMNS = {
         ("mine_budget", "INTEGER DEFAULT 0"),
         ("detonations", "INTEGER DEFAULT 0"),
         ("spent_mines", "TEXT"),
+        ("last_coords", "TEXT"),
     ],
     "flags": [
         ("withdrawn_turn", "INTEGER"),
@@ -346,9 +348,9 @@ def save_state(state: GameState) -> None:
                 turn_number, status, last_post_uri, last_coord, last_result,
                 last_source, last_caller, last_votes, last_voters,
                 exploded_cell, mine_budget, detonations, spent_mines,
-                updated_at
+                last_coords, updated_at
             ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                      ?, ?, CURRENT_TIMESTAMP)
+                      ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(id) DO UPDATE SET
                 game_id=excluded.game_id, rows=excluded.rows,
                 cols=excluded.cols, mine_count=excluded.mine_count,
@@ -365,6 +367,7 @@ def save_state(state: GameState) -> None:
                 mine_budget=excluded.mine_budget,
                 detonations=excluded.detonations,
                 spent_mines=excluded.spent_mines,
+                last_coords=excluded.last_coords,
                 updated_at=CURRENT_TIMESTAMP
             """,
             (
@@ -378,6 +381,7 @@ def save_state(state: GameState) -> None:
                 state.mine_budget,
                 state.detonations,
                 json.dumps(sorted(list(cell) for cell in state.spent_mines)),
+                json.dumps(list(state.last_coords)),
             ),
         )
 
@@ -435,6 +439,7 @@ def load_state() -> GameState | None:
         mine_budget=_int(row, "mine_budget"),
         detonations=_int(row, "detonations"),
         spent_mines={tuple(cell) for cell in _json(row, "spent_mines")},
+        last_coords=[str(c) for c in _json(row, "last_coords")],
     )
 
 

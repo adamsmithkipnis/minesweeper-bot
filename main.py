@@ -1173,7 +1173,7 @@ def _remember(uri: str, kind: str, game_id: int, turn: int | None = None) -> Non
 
 def _post_board(state: game.GameState, text: str, kind: str,
                 extra_dids: dict | None = None, flags=(), checks=()) -> str:
-    image = renderer.render_board(state, highlight=state.last_coord,
+    image = renderer.render_board(state, highlight=state.last_turn_coords(),
                                   flags=flags, checks=checks)
     alt = renderer.build_alt_text(state, flags, checks)
     uri = bluesky.post_with_image(text, image, alt=alt, kind=kind,
@@ -2227,6 +2227,7 @@ def _game_tick() -> None:
     caller_did = vote.caller.did if (vote and source == "crowd" and vote.caller) else ""
 
     state.last_coord = coord
+    state.last_coords = [coord]
     state.last_result = result
     state.last_source = source
     state.last_caller = vote.caller_handle if (vote and source == "crowd") else ""
@@ -2382,6 +2383,7 @@ def _play_knockout_turn(state: game.GameState, replies: list,
 
     last = plays[-1]
     state.last_coord = last.coord
+    state.last_coords = [p.coord for p in plays]
     state.last_result = last.result
     state.last_source = source
     state.last_caller = last.handle

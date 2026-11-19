@@ -588,9 +588,10 @@ def _draw_mine(draw, box):
 # Image
 # ---------------------------------------------------------------------------
 
-def render_board(state: game.GameState, highlight: str = "",
+def render_board(state: game.GameState, highlight=(),
                  flags=(), day: date | None = None, checks=()) -> bytes:
-    """Render the board to PNG bytes. `highlight` rings a coordinate.
+    """Render the board to PNG bytes. `highlight` rings a coordinate, or
+    every coordinate in a collection — a knockout turn plays several.
 
     `day` picks the smiley's holiday costume and defaults to today.
     """
@@ -687,8 +688,12 @@ def render_board(state: game.GameState, highlight: str = "",
                           fill=NUMBER_COLORS[int(token)], font=cell_font,
                           anchor="mm")
 
-    if highlight and state.in_bounds(highlight):
-        r, c = game.coord_to_index(highlight)
+    if isinstance(highlight, str):
+        highlight = [highlight]
+    for coord in highlight:
+        if not coord or not state.in_bounds(coord):
+            continue
+        r, c = game.coord_to_index(coord)
         x0, y0 = grid_x + c * CELL, grid_y + r * CELL
         draw.rectangle((x0 + 2, y0 + 2, x0 + CELL - 2, y0 + CELL - 2),
                        outline=HIGHLIGHT, width=2)
