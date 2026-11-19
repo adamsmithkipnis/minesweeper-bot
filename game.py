@@ -78,6 +78,9 @@ class GameState:
 
     # What happened on the previous turn, reported in the next post.
     last_coord: str = ""
+    # Every cell played on the previous turn. A knockout turn opens one per
+    # player, and the board rings all of them; `last_coord` is the last.
+    last_coords: list = field(default_factory=list)
     last_result: str = ""                 # SAFE | MINE
     last_source: str = ""                 # 'crowd' | 'bot' | 'opening'
     last_caller: str = ""                 # handle credited for the move
@@ -98,6 +101,14 @@ class GameState:
     @property
     def total_safe(self) -> int:
         return self.rows * self.cols - self.mine_count
+
+    def last_turn_coords(self) -> list:
+        """The cells the previous turn played, for the board to ring."""
+        # A list that does not end on `last_coord` is stale: something set
+        # the move without it. Trust the single coordinate then.
+        if self.last_coords and self.last_coords[-1] == self.last_coord:
+            return list(self.last_coords)
+        return [self.last_coord] if self.last_coord else []
 
     def adjacent_mines(self, r: int, c: int) -> int:
         return sum(1 for n in neighbors(r, c, self.rows, self.cols)
@@ -191,6 +202,7 @@ def new_game(game_id: int, rows: int = DEFAULT_ROWS, cols: int = DEFAULT_COLS,
     )
     reveal(state, *start)
     state.last_coord = index_to_coord(*start)
+    state.last_coords = [state.last_coord]
     state.last_result = SAFE
     state.last_source = "opening"
     return state

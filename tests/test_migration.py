@@ -80,6 +80,13 @@ class MigratingALiveDatabase(unittest.TestCase):
         self.assertEqual(back.mine_budget, 2)
         self.assertEqual(back.detonations, 1)
 
+    def test_every_cell_of_the_last_turn_survives_a_reload(self):
+        db.init_db()
+        state = game.new_game(7, rng=random.Random(3), mine_budget=2)
+        state.last_coords, state.last_coord = ["A1", "C4"], "C4"
+        db.save_state(state)
+        self.assertEqual(db.load_state().last_turn_coords(), ["A1", "C4"])
+
     def test_migrating_twice_is_harmless(self):
         db.init_db()
         db.init_db()

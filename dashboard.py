@@ -181,7 +181,7 @@ def board_png():
         return Response("no board", status=404)
     flags = state.shown_flags(
         db.flagged_coords(state.game_id, config.FLAG_QUORUM))
-    return Response(renderer.render_board(state, highlight=state.last_coord,
+    return Response(renderer.render_board(state, highlight=state.last_turn_coords(),
                                           flags=flags),
                     mimetype="image/png")
 

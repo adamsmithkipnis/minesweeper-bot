@@ -178,6 +178,35 @@ class CascadeCollisions(unittest.TestCase):
         self.assertTrue(any(f"{consumed} was valid" in t
                             and "+1 point" in t for t in sent), sent)
 
+    def test_the_board_rings_every_cell_the_turn_played(self):
+        """Two players open two cells: the posted board marks both, and so
+        does the board reloaded for the next turn and the dashboard."""
+        state = game.new_game(1, rng=random.Random(5), mine_budget=2)
+        hidden = [(r, c) for r in range(state.rows) for c in range(state.cols)
+                  if (r, c) not in state.revealed
+                  and (r, c) not in state.mine_cells
+                  and state.adjacent_mines(r, c) > 0]   # no cascades
+        a, b = (game.index_to_coord(*cell) for cell in hidden[:2])
+        position = solver.Position.from_state(state)
+        analysis = solver.analyze(position)
+        already = {game.index_to_coord(r, c) for r, c in state.revealed}
+
+        posted = []
+        real = (main._post_board, main.bluesky.post_reply, main._remember)
+        main._post_board = lambda st, *a, **k: (
+            posted.append(st.last_turn_coords()) or "at://board/1")
+        main.bluesky.post_reply = lambda text, **kw: "at://sent/1"
+        main._remember = lambda *a, **k: None
+        try:
+            main._play_knockout_turn(
+                state, [reply("did:a", a, "1"), reply("did:b", b, "2")],
+                already, position, analysis, {}, {})
+        finally:
+            main._post_board, main.bluesky.post_reply, main._remember = real
+
+        self.assertEqual(posted, [[a, b]])
+        self.assertEqual(db.load_state().last_turn_coords(), [a, b])
+
     def test_calling_the_same_cell_is_preserved_as_a_duplicate(self):
         state = game.new_game(1, rng=random.Random(5), mine_budget=2)
         first, _ = self._cascade_pair(state)

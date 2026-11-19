@@ -82,5 +82,26 @@ class Reveal(unittest.TestCase):
         self.assertEqual(len(state.revealed), state.total_safe)
 
 
+class LastTurnCoords(unittest.TestCase):
+    def test_the_opening_is_the_last_turn(self):
+        state = game.new_game(1, rng=random.Random(7))
+        self.assertEqual(state.last_turn_coords(), [state.last_coord])
+
+    def test_every_play_of_a_knockout_turn_is_kept(self):
+        state = game.new_game(1, rng=random.Random(7))
+        state.last_coords, state.last_coord = ["A1", "C4", "E2"], "E2"
+        self.assertEqual(state.last_turn_coords(), ["A1", "C4", "E2"])
+
+    def test_a_stale_list_gives_way_to_the_single_move(self):
+        state = game.new_game(1, rng=random.Random(7))
+        state.last_coord = "B3"           # set without updating the list
+        self.assertEqual(state.last_turn_coords(), ["B3"])
+
+    def test_no_move_rings_nothing(self):
+        state = game.GameState(game_id=1, rows=9, cols=9, mine_count=10,
+                               mine_cells=set())
+        self.assertEqual(state.last_turn_coords(), [])
+
+
 if __name__ == "__main__":
     unittest.main()
