@@ -146,6 +146,39 @@ class HeldTurn(unittest.TestCase):
         main.game_tick()
         self.assertEqual(self.posted, [])
 
+    def posting(self, bad):
+        """post_with_image that times out `bad` times, then posts."""
+        attempts = []
+
+        def post_with_image(text, image, alt="", **kw):
+            attempts.append(text)
+            if len(attempts) <= bad:
+                raise TimeoutError("InvokeTimeoutError")
+            self.posted.append(text)
+            return "at://board/2"
+        main.bluesky.post_with_image = post_with_image
+        return attempts
+
+    def test_a_failed_post_is_retried_in_minutes_not_a_whole_turn(self):
+        """23 November: fifteen board posts timed out, and each one waited a
+        whole interval, so the crowd lost turns for up to 2.5 hours."""
+        self.reading(bad=0, how="raise")
+        self.posting(bad=1)
+        before = db.load_state()
+        main.game_tick()
+        self.assert_not_played(before)
+        self.assertEqual(len(self.jobs), 1)
+        self.assertEqual(self.jobs[0]["id"], "game_tick_retry")
+        main.game_tick()                             # the retry
+        self.assert_played()
+
+    def test_a_failed_post_by_hand_does_not_schedule(self):
+        main.scheduler = SimpleNamespace(running=False, add_job=self.fail)
+        self.reading(bad=0, how="raise")
+        self.posting(bad=99)
+        main.game_tick()
+        self.assertEqual(self.posted, [])
+
     def test_two_ticks_never_play_at_once(self):
         self.reading(bad=0, how="raise")
         with main._tick_lock:
@@ -174,6 +207,35 @@ def notification(did, text, rkey, parent=TURN):
     item.record.reply.parent = SimpleNamespace(uri=parent)
     return SimpleNamespace(author=item.author, record=item.record,
                            uri=item.uri, cid=item.cid, reason="reply")
+
+
+class Timeout(unittest.TestCase):
+    def test_reads_and_writes_get_more_than_httpx_default(self):
+        """atproto sets no timeout, leaving httpx's 5 s, which a board image
+        upload overran fifteen times on 23 November."""
+        timeout = bluesky._http_timeout()
+        self.assertGreaterEqual(timeout.read, 30)
+        self.assertGreaterEqual(timeout.write, 30)
+        self.assertLessEqual(timeout.connect, 10)
+
+    def test_login_hands_the_timeout_to_the_client(self):
+        import atproto
+        seen = {}
+
+        class FakeClient:
+            def __init__(self, request=None):
+                seen["timeout"] = request._client.timeout
+
+            def login(self, handle, password):
+                return SimpleNamespace(did="did:plc:bot")
+
+        saved = (atproto.Client, bluesky._client, config.POST_MODE)
+        atproto.Client, config.POST_MODE = FakeClient, "live"
+        try:
+            bluesky.login()
+        finally:
+            atproto.Client, bluesky._client, config.POST_MODE = saved
+        self.assertEqual(seen["timeout"].read, bluesky.HTTP_TIMEOUT_SECONDS)
 
 
 class Reading(unittest.TestCase):
