@@ -16,6 +16,14 @@ One deliberate departure: the original has no row or column labels, because
 you play it with a mouse. Here a coordinate is how a person votes, so the
 labels stay — set in the grey margin outside the sunken grid panel, where the
 original frame has the room for them.
+
+Past ten cells a side, one set of labels is no longer enough: a player reading
+row R at column 24 has to follow it all the way back to the left edge. So a
+long side is labelled at both ends, and a darker rule every five cells cuts
+the grid into blocks, like graph paper, so a coordinate can be counted from
+the nearest rule rather than from the edge. Both follow the length of the side
+they help with, so a board that is long in one direction only gets them for
+that direction.
 """
 
 from __future__ import annotations
@@ -49,6 +57,9 @@ LED_OFF = "#3B0000"      # unlit segments stay faintly visible, as on real LEDs
 MINE_CELL = "#C0C0C0"
 EXPLODED_CELL = "#FF0000"
 HIGHLIGHT = "#0000FF"
+# Darker than GRID_LINE and the bevel shadow, so it reads as a guide rather
+# than another tile edge. Used nowhere else, which lets a test count it.
+GUIDE_LINE = "#404040"
 
 # Kept under their old names because tools/avatar.py imports them.
 BG = FACE
@@ -70,6 +81,11 @@ PAD = 12
 HEADER_H = 76
 LABEL_LEFT = 36
 LABEL_TOP = 32
+# A side longer than this is labelled at both ends and ruled every GUIDE_EVERY
+# cells. Ten is where players started losing their place.
+LONG_SIDE = 10
+GUIDE_EVERY = 5
+GUIDE_WIDTH = 2
 
 _FONT_PATHS = [
     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
@@ -597,11 +613,16 @@ def render_board(state: game.GameState, highlight=(),
     """
     grid = display_grid(state, flags, checks)
     grid_w, grid_h = state.cols * CELL, state.rows * CELL
+    # Rows long enough to lose your place along get their letter at the right
+    # end too; tall columns get their number along the bottom.
+    long_rows, long_cols = state.cols > LONG_SIDE, state.rows > LONG_SIDE
 
     grid_x = OUTER_BEVEL + PAD + LABEL_LEFT + PANEL_BEVEL
     grid_y = (OUTER_BEVEL + PAD + HEADER_H + PAD + LABEL_TOP + PANEL_BEVEL)
-    width = grid_x + grid_w + PANEL_BEVEL + PAD + OUTER_BEVEL
-    height = grid_y + grid_h + PANEL_BEVEL + PAD + OUTER_BEVEL
+    width = (grid_x + grid_w + PANEL_BEVEL + (LABEL_LEFT if long_rows else 0)
+             + PAD + OUTER_BEVEL)
+    height = (grid_y + grid_h + PANEL_BEVEL + (LABEL_TOP if long_cols else 0)
+              + PAD + OUTER_BEVEL)
 
     img = Image.new("RGB", (width, height), FACE)
     draw = ImageDraw.Draw(img)
@@ -646,12 +667,20 @@ def render_board(state: game.GameState, highlight=(),
     # and the one thing a voter cannot play without.
     label_font = _font(20)
     letters = game.row_letters(state.rows)
+    number_ys = [grid_y - PANEL_BEVEL - LABEL_TOP // 2]
+    if long_cols:
+        number_ys.append(grid_y + grid_h + PANEL_BEVEL + LABEL_TOP // 2)
+    letter_xs = [grid_x - PANEL_BEVEL - LABEL_LEFT // 2]
+    if long_rows:
+        letter_xs.append(grid_x + grid_w + PANEL_BEVEL + LABEL_LEFT // 2)
     for c in range(state.cols):
-        draw.text((grid_x + c * CELL + CELL // 2, grid_y - PANEL_BEVEL - LABEL_TOP // 2),
-                  str(c + 1), fill=TEXT, font=label_font, anchor="mm")
+        for y in number_ys:
+            draw.text((grid_x + c * CELL + CELL // 2, y),
+                      str(c + 1), fill=TEXT, font=label_font, anchor="mm")
     for r in range(state.rows):
-        draw.text((grid_x - PANEL_BEVEL - LABEL_LEFT // 2, grid_y + r * CELL + CELL // 2),
-                  letters[r], fill=TEXT, font=label_font, anchor="mm")
+        for x in letter_xs:
+            draw.text((x, grid_y + r * CELL + CELL // 2),
+                      letters[r], fill=TEXT, font=label_font, anchor="mm")
 
     # The playing field: one sunken panel, tiles inside it.
     _bevel(draw, (grid_x - PANEL_BEVEL, grid_y - PANEL_BEVEL,
@@ -687,6 +716,21 @@ def render_board(state: game.GameState, highlight=(),
                 draw.text((x0 + CELL // 2, y0 + CELL // 2 - 1), token,
                           fill=NUMBER_COLORS[int(token)], font=cell_font,
                           anchor="mm")
+
+    # Guide rules every five cells, over the tiles and under the highlight
+    # ring, straddling the boundary so neither neighbour loses more than a
+    # pixel. Only interior boundaries: the panel bevel already marks the edge.
+    half = GUIDE_WIDTH // 2
+    if long_rows:
+        for c in range(GUIDE_EVERY, state.cols, GUIDE_EVERY):
+            x = grid_x + c * CELL
+            draw.rectangle((x - half, grid_y, x - half + GUIDE_WIDTH - 1,
+                            grid_y + grid_h - 1), fill=GUIDE_LINE)
+    if long_cols:
+        for r in range(GUIDE_EVERY, state.rows, GUIDE_EVERY):
+            y = grid_y + r * CELL
+            draw.rectangle((grid_x, y - half, grid_x + grid_w - 1,
+                            y - half + GUIDE_WIDTH - 1), fill=GUIDE_LINE)
 
     if isinstance(highlight, str):
         highlight = [highlight]

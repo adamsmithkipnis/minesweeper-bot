@@ -152,6 +152,62 @@ class Image(unittest.TestCase):
         self.assertEqual(blue(three) - none, 3 * ring)
         self.assertEqual(blue(three[0]), blue([three[0]]))
 
+    def _image(self, rows, cols, mines):
+        from PIL import Image as PILImage
+        import io
+        state = game.new_game(1, rows=rows, cols=cols, mines=mines,
+                              rng=random.Random(7))
+        png = renderer.render_board(state, day=date(2026, 6, 2))
+        return state, PILImage.open(io.BytesIO(png)).convert("RGB")
+
+    _GUIDE = tuple(int(renderer.GUIDE_LINE[i:i + 2], 16) for i in (1, 3, 5))
+    _ORIGIN = (renderer.OUTER_BEVEL + renderer.PAD + renderer.LABEL_LEFT
+               + renderer.PANEL_BEVEL,
+               renderer.OUTER_BEVEL + renderer.PAD + renderer.HEADER_H
+               + renderer.PAD + renderer.LABEL_TOP + renderer.PANEL_BEVEL)
+
+    def _ruled(self, img, state, axis, k):
+        """Whether boundary k (before cell k) carries a full guide rule:
+        vertical for axis 'col', horizontal for axis 'row'."""
+        gx, gy = self._ORIGIN
+        at = (gx if axis == "col" else gy) + k * renderer.CELL - 1
+        span = (state.rows if axis == "col" else state.cols) * renderer.CELL
+        start = gy if axis == "col" else gx
+        pixels = [img.getpixel((at, start + i) if axis == "col"
+                               else (start + i, at)) for i in range(span)]
+        return all(p == self._GUIDE for p in pixels)
+
+    def test_small_boards_keep_one_set_of_labels_and_no_guides(self):
+        """Up to ten a side the board is exactly as before."""
+        for side in (9, 10):
+            state, img = self._image(side, side, 10)
+            self.assertFalse(self._ruled(img, state, "col", 5))
+            self.assertFalse(self._ruled(img, state, "row", 5))
+            extra = img.width - side * renderer.CELL
+            self.assertEqual(extra, 2 * (renderer.OUTER_BEVEL + renderer.PAD
+                                         + renderer.PANEL_BEVEL)
+                             + renderer.LABEL_LEFT)
+
+    def test_long_sides_get_labels_at_both_ends(self):
+        _, small = self._image(10, 10, 10)
+        _, big = self._image(26, 26, 88)
+        grow = 16 * renderer.CELL
+        self.assertEqual(big.width - small.width, grow + renderer.LABEL_LEFT)
+        self.assertEqual(big.height - small.height, grow + renderer.LABEL_TOP)
+
+    def test_guides_rule_every_fifth_boundary_on_long_sides_only(self):
+        state, img = self._image(26, 26, 88)
+        for axis in ("col", "row"):
+            ruled = [k for k in range(1, 26) if self._ruled(img, state, axis, k)]
+            self.assertEqual(ruled, [5, 10, 15, 20, 25], axis)
+
+        # Long rows but short columns: only the vertical rules.
+        state, wide = self._image(9, 16, 20)
+        self.assertEqual([k for k in range(1, 16)
+                          if self._ruled(wide, state, "col", k)], [5, 10, 15])
+        self.assertFalse(self._ruled(wide, state, "row", 5))
+        self.assertEqual(wide.height, self._image(9, 9, 10)[1].height)
+
 
 @unittest.skipUnless(HAS_PILLOW, "Pillow not installed (use .venv/bin/python)")
 class Holidays(unittest.TestCase):
