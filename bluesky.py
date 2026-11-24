@@ -52,6 +52,20 @@ def _dry() -> bool:
     return config.POST_MODE == "dry"
 
 
+# atproto builds its httpx client with no timeout of its own, which leaves
+# httpx's default of five seconds for everything. A board image upload to a
+# busy server can take longer than that: on 23 November that timed out 15
+# board posts in one day, each costing the crowd a turn. Connecting stays
+# quick to fail; reading and writing get room for the image.
+HTTP_TIMEOUT_SECONDS = 30
+HTTP_CONNECT_SECONDS = 10
+
+
+def _http_timeout():
+    import httpx
+    return httpx.Timeout(HTTP_TIMEOUT_SECONDS, connect=HTTP_CONNECT_SECONDS)
+
+
 def login() -> None:
     """Authenticate, or set up the dry-run stand-in."""
     global _client
@@ -64,7 +78,8 @@ def login() -> None:
         return
 
     from atproto import Client
-    client = Client()
+    from atproto_client.request import Request
+    client = Client(request=Request(timeout=_http_timeout()))
     profile = client.login(config.HANDLE, config.APP_PASSWORD)
     _client = client
     _register_handle(config.HANDLE, profile.did)

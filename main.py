@@ -2107,12 +2107,16 @@ def _fetch_replies(uri: str) -> list:
     return best
 
 
-def _retry_turn_soon() -> None:
+def _retry_turn_soon(why: str = "Replies unreadable") -> None:
     """Play the turn again in a couple of minutes instead of a whole interval.
 
     Nothing has been saved or posted, so the retry starts from the same state
     and reads the same post, plus whatever arrived in between. Only the
     scheduler's own ticks get one; `--play` has no scheduler running.
+
+    A failed board post gets one too. On 23 November Bluesky timed out on 15
+    board posts in a day, and waiting a whole interval after each one turned
+    single failures into gaps of up to two and a half hours.
     """
     if not scheduler.running:
         return
@@ -2120,7 +2124,7 @@ def _retry_turn_soon() -> None:
         minutes=_FETCH_RETRY_MINUTES)
     scheduler.add_job(game_tick, "date", run_date=run_date,
                       id="game_tick_retry", replace_existing=True)
-    logger.warning("Replies unreadable; retrying the turn at %s",
+    logger.warning("%s; retrying the turn at %s", why,
                    run_date.strftime("%H:%M:%S %Z"))
 
 
@@ -2281,6 +2285,7 @@ def _game_tick() -> None:
                           checks=_visible_checks(state, flags))
     except Exception:
         logger.exception("Posting failed; turn not saved and will be replayed")
+        _retry_turn_soon("Posting failed")
         return
     state.last_post_uri = uri
 
@@ -2429,6 +2434,7 @@ def _play_knockout_turn(state: game.GameState, replies: list,
                           checks=_visible_checks(state, flags))
     except Exception:
         logger.exception("Posting failed; turn not saved and will be replayed")
+        _retry_turn_soon("Posting failed")
         return
     state.last_post_uri = uri
 
